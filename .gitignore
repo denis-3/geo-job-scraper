@@ -3,4 +3,5 @@
 /scrape-data/
 *.csv
 package-lock.json
-
+*.json
+.env

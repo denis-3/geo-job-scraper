@@ -7,7 +7,27 @@ const cheerio = require("cheerio")
 const https = require("https")
 const http2 = require("http2")
 const url = require("url")
+const grc20 = require("@graphprotocol/grc-20")
+const { publishOpsToSpace } = require("./grc20-tools.js")
+require("dotenv").config()
 
+// Geo entity IDs
+const GEO_ENT_IDS = {
+	// spaces
+	targetSpace: "CVQRHcnE9S2XN8GqHeqkZV",
+	// entities
+	company: "7ZpyzJE2Zh62FpmVu5Wkc1",
+	jobOpening: "RvttaELRF1CRagzW2ZajjT",
+	// attributes
+	employer: "QoFc3JhedpbXqbo7dcySVP",
+	minSalary: "GAXHVCav3evrBkWhWwD2K4",
+	maxSalary: "Mg4FEdvC8VskHT9kUyjDYK",
+	payPeriodId: "8zuGZYesZW4UMmSCTCnhNE",
+	reqSkills: "PouZHsLxKo9F7acqJ3Aggc",
+	compRating: "6mXHF5mmfk9nfUtudQdCgH",
+}
+
+// standard headers for scraping
 const STANDARD_HEADERS = {
 	"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1.1 Safari/605.1.1",
 	"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -26,7 +46,7 @@ const STANDARD_HEADERS = {
 	"TE": "trailers"
 }
 
-// node ciphers
+// shuffle around node ciphers for scraping
 const NC = crypto.constants.defaultCoreCipherList.split(":")
 const STANDARD_CIPHERS = shuffle(NC.slice(0, 3)).join(":") + ":" + shuffle(NC.slice(3, 9999)).join(":")
 
@@ -50,13 +70,13 @@ async function getMonsterJobTitles(query) {
 }
 
 async function getGlassDoorLocInfo(query) {
-	const ffService = new firefox.ServiceBuilder("/usr/bin/geckodriver")
+	const ffService = new firefox.ServiceBuilder(process.env.GECKO_DRIVER_PATH)
 	const ffOpts = new firefox.Options()
-		.setBinary("/path/to/binary/")
+		.setBinary(process.env.FIREFOX_BIN_PATH)
 		.addArguments("--headless")
 		.addArguments("--width=1200")
 		.addArguments("--height=800")
-		.setPreference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.3")
+		.setPreference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.3" + String(Math.random()))
 		.setPreference("dom.webdriver.enabled", false)
 		.setPreference("useAutomationExtension", false)
 	const driver = new Builder().forBrowser("firefox")
@@ -137,6 +157,8 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 	const rawJobsData = JSON.parse(resp.text)[0].data.jobListings.jobListings
 		.map(j => j.jobview)
 
+	fs.writeFileSync("rawJobsGd.json", JSON.stringify(rawJobsData, null, 1))
+
 	const processedJobs = []
 	for (var i = 0; i < rawJobsData.length; i++) {
 		const thisJob = rawJobsData[i]
@@ -155,15 +177,15 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 
 		// salary //
 		const salaryData = thisJob.header.payPeriodAdjustedPay
-		var salaryStr = ""
-		if (salaryData != null) {
-			salaryStr = salaryData.p10 + " - " + salaryData.p90 + " " + thisJob.header.payCurrency
-			if (thisJob.header.payPeriod == "ANNUAL") {
-				salaryStr += " /year"
-			} else if (thisJob.header.payPeriod == "HOURLY") {
-				salaryStr += " /hour"
-			}
-		}
+		// var salaryStr = ""
+		// if (salaryData !== null) {
+		// 	salaryStr = salaryData.p10 + " - " + salaryData.p90 + " " + thisJob.header.payCurrency
+		// 	if (thisJob.header.payPeriod == "ANNUAL") {
+		// 		salaryStr += "/year"
+		// 	} else if (thisJob.header.payPeriod == "HOURLY") {
+		// 		salaryStr += "/hour"
+		// 	}
+		// }
 
 		const procJob = {
 			title: thisJob.job.jobTitleText,
@@ -172,10 +194,14 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 			companyRating: thisJob.header.rating,
 			location: thisJob.header.locationName,
 			shortDescription: thisJob.job.descriptionFragmentsText.join("\n"),
-			salary: salaryStr,
+			minSalary: salaryData?.p10 ?? null,
+			maxSalary: salaryData?.p90 ?? null,
+			payPeriod: thisJob.header.payPeriod ?? null,
+			payCurrency: thisJob.header.payCurrency ?? null,
 			requiredSkills: skillsNames,
 			otherAttributes: otherAttrs,
-			jobLink: thisJob.header.seoJobLink
+			jobLink: thisJob.header.seoJobLink,
+			approxPublishTime: Date.now() - thisJob.header.ageInDays * 24 * 60 * 60 * 1000
 		}
 		processedJobs.push(procJob)
 	}
@@ -183,18 +209,86 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 	return {jobs: processedJobs, newCookie: extractCookiesFromHeaders(resp.headers)}
 }
 
+// converts jobs to triplet ops for Geo GRC-20
+async function convertJobsToGeoOps(jobs) {
+	// cache of company names to Geo entity ID
+	const companyGeoIdCache = {}
+
+	const allOps = []
+
+	for (var i = 0; i < jobs.length; i++) {
+		const thisId = grc20.Id.generate()
+
+		// get company entity or create it if it doesn't exist
+		var thisCompanyId = companyGeoIdCache[jobs[i].company]
+		if (thisCompanyId === undefined) {
+			const searchRes = await geoFuzzySearch(jobs[i].company)
+			if (searchRes.length == 0) { // no results
+				const compProps = {
+					[grc20.SystemIds.DESCRIPTION_ATTRIBUTE]: {value: "A company whose profile is scraped from the GlassDoor website.", type: "TEXT"},
+					[GEO_ENT_IDS.compRating]: {value: String(jobs[i].companyRating*10), type: "NUMBER"},
+					[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: "https://www.example.com", type: "URL"},
+				}
+
+				const imgResult = typeof jobs[i].companyLogo == "string" ? grc20.Image.make(jobs[i].companyLogo) : undefined
+				if (imgResult !== undefined) {
+					compProps[grc20.ContentIds.AVATAR_ATTRIBUTE] = {to: imgResult.imageId}
+				}
+
+				// create the company entity
+				const newComp = grc20.Graph.createEntity({
+					name: jobs[i].company,
+					types: [GEO_ENT_IDS.company],
+					properties: compProps
+				})
+				allOps.push(...newComp.ops)
+
+				thisCompanyId = newComp.id
+			} else {
+				thisCompanyId = results[0].id
+			}
+		}
+
+		console.log(jobs[i])
+		throw Error("fkgjk")
+
+		// create the job entity
+		const newJob = grc20.Graph.createEntity({
+			name: jobs[i].title,
+			types: [GEO_ENT_IDS.jobOpening],
+			properties: {
+				// value attributes
+				[grc20.SystemIds.DESCRIPTION_ATTRIBUTE]: {value: jobs[i].shortDescription, type: "TEXT"},
+				[grc20.ContentIds.LOCATION_ATTRIBUTE]: {value: jobs[i].location, type: "TEXT"},
+				[GEO_ENT_IDS.minSalary]: {value: String(jobs[i].minSalary), type: "NUMBER"},
+				[GEO_ENT_IDS.maxSalary]: {value: String(jobs[i].maxSalary), type: "NUMBER"},
+				[GEO_ENT_IDS.payPeriod]: {value: jobs[i].payPeriod, type: "TEXT"},
+				[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: jobs[i].jobLink, type: "URL"},
+				[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: (new Date(jobs[i].approxPublishTime)).toISOString(), type: "TIME"},
+				// relation attributes
+				[GEO_ENT_IDS.employer]: {to: thisCompanyId}
+			}
+		})
+		allOps.push(...newJob.ops)
+	}
+
+	return allOps
+}
+
 async function main() {
 	// main scrape config
-	const letters = "ets".split("")
-	const cityList = ["San Francisco", "San Jose"]
-	const pageDepth = 4
+	const letters = "e".split("")
+	const cityList = ["San Francisco"]
+	const pageDepth = 1
 
+	console.log("Getting job titles...")
 	const jobTitles = []
 	for (var i = 0; i < letters.length; i++) {
 		const newJobTitles = await getMonsterJobTitles(letters[i])
 		jobTitles.push(...newJobTitles)
 	}
-	console.log("Job titles", jobTitles)
+	console.log("Job titles:", jobTitles)
+
 	var successCount = 0
 	const totalCount = cityList.length * jobTitles.length * pageDepth
 	const allJobs = []
@@ -202,36 +296,57 @@ async function main() {
 	var jobCt = [0, 0, 0] // count by city, job title, page
 	const jobCtLimits = [jobTitles.length, pageDepth] // job counting limits: job title, page
 
+	console.log("Getting city info...")
 	const cityInfoList = []
 	for (var i = 0; i < cityList.length; i++) {
 		const cityInfo = await getGlassDoorLocInfo(cityList[i])
 		cityInfoList.push(cityInfo)
 	}
+	console.log("City info:", cityInfoList)
 
+	console.log("Starting main scrape...")
 	const gdCookie = {}
 	// get the job (glassdoor)
 	for (var i = 0; i < totalCount; i++) {
 		try {
-			const newJobs = await scrapeGlassDoor(jobTitles[jobCt[1]], cityInfoList[jobCt[0]], 30, jobCt[2], gdCookie)
-			allJobs.push(...newJobs.jobs)
-			console.log("new cookie", newJobs.newCookie)
-			for (const key in newJobs.newCookie) {
-				gdCookie[key] = newJobs.newCookie[key]
+			const gdScrapeRes = await scrapeGlassDoor(jobTitles[jobCt[1]], cityInfoList[jobCt[0]], 30, jobCt[2], gdCookie)
+			var newJobCount = 0
+			gdScrapeRes.jobs.forEach(j => {
+				const jHash = quickSha256(j.title + j.jobLink)
+				if (!allJobHashes.includes(jHash)) {
+					allJobs.push(j)
+					allJobHashes.push(jHash)
+					newJobCount ++
+				}
+			})
+			for (const key in gdScrapeRes.newCookie) {
+				gdCookie[key] = gdScrapeRes.newCookie[key]
 			}
 			successCount ++
 			jobCt = arrayCountUp(jobCt, jobCtLimits)
-			console.log("iteration", i, "got", newJobs.jobs.length, "jobs")
+			console.log("Iteration", i, ", got", newJobCount, "jobs")
 		} catch (e) {
-			console.log("it didn't work", e)
+			console.error(e)
 		}
 	}
 
-	// todo: De-duplication after all jobs done
+	allJobs.length = 10
 
-	jsonToCsv(allJobs, "gd-scrape", ["title", "company", "companyLogo", "companyRating",
-		"location", "salary", "shortDescription", "requiredSkills", "otherAttributes", "jobLink"])
+	console.log("~~~Scraping metrics~~~")
+	console.log("Success ratio:", successCount, "/", totalCount)
+	console.log("Total jobs:", allJobs.length)
 
-	console.log("success / total", successCount, "/", totalCount)
+	// save to CSV if needed
+	// jsonToCsv(allJobs, "gd-scrape", ["title", "company", "companyLogo", "companyRating",
+		//"location", "minSalary", "maxSalary", "payPeriod", "shortDescription",
+		//"requiredSkills", "otherAttributes", "jobLink"])
+
+	// upload to Geo
+	console.log("Getting GRC-20 triplet ops from jobs...")
+	const geoTripletOps = await convertJobsToGeoOps(allJobs)
+	console.log("Uploading data to Geo...")
+	const txInfo = await publishOpsToSpace(GEO_ENT_IDS.targetSpace, geoTripletOps, "Add data from GlassDoor scrape")
+	console.log("Data uploaded! Transaction info:", txInfo)
 }
 
 main()
@@ -289,6 +404,13 @@ function httpsFetch(urlStr, options) {
 	})
 }
 
+async function geoFuzzySearch(query) {
+	const response = await fetch(`https://api-testnet.grc-20.thegraph.com/search?q=${query}&network=TESTNET`)
+	const { results } = await response.json();
+	if (results === undefined) return []
+	return results
+}
+
 function jsonToCsv(initData, filename, rows) {
 	// const initData = JSON.parse(fs.readFileSync(`./${filename}.json`))
 	if (!Array.isArray(initData)) throw Error("Data is not an array")
@@ -302,10 +424,6 @@ function jsonToCsv(initData, filename, rows) {
 		csvData += "\n"
 	});
 	fs.writeFileSync(`./${filename}.csv`, csvData.slice(0, -1))
-}
-
-function deduplicateArr(arr) {
-    return arr.filter((item, index) => arr.indexOf(item) === index);
 }
 
 function quickSha256(inp) {
@@ -346,7 +464,7 @@ function injectCookies(headers, cookiesObj) {
 function getHeadersFromFile(filePath) {
 	const fileStr = fs.readFileSync(filePath).toString("utf8").trim()
 	const headers = {}
-	fileStr.split("\n").forEach(l => {
+	fileStr.split("\n").forEach(l => {if (companies[jobs.company])
 		l = l.trim()
 		const idx = l.indexOf(":")
 		headers[l.slice(0, idx)] = l.slice(idx+1, 9999)
@@ -372,4 +490,13 @@ function arrayCountUp(currentCount, countLimits) {
 		}
 	}
 	return currentCount
+}
+
+// extract company information from jobs list
+function getCompaniesFromJobs(jobs) {
+	const companies = {}
+	for (var i = 0; i < jobs.length; i++) {
+		companies[jobs[i].company] ??= {name: jobs[i].company, logo: jobs[i].companyLogo, rating: jobs[i].companyRating}
+	}
+	return Object.entries(companies)
 }
