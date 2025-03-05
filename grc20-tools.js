@@ -6,15 +6,12 @@ const { getWallet } = require("./wallet.js")
 // console.log(grc20)
 
 async function createSpace(spaceName, initialEditor) {
-	const result = await fetch("https://api-testnet.grc-20.thegraph.com/deploy", {
-		method: "POST",
-		body: JSON.stringify({
-			initialEditorAddress: grc20.getChecksumAddress(initialEditor),
-			spaceName: spaceName,
-		})
+	const spaceId = await grc20.Graph.createSpace({
+		initialEditorAddress: grc20.getChecksumAddress(initialEditor),
+		spaceName: spaceName,
+		network: "TESTNET"
 	})
 
-	const { spaceId } = await result.json();
 	return spaceId
 }
 
@@ -28,6 +25,7 @@ async function publishOpsToSpace(spaceId, ops, commitMessage) {
 		ops: ops
 	})
 
+	// get TX info
 	const resp = await fetch(`https://api-testnet.grc-20.thegraph.com/space/${spaceId}/edit/calldata`, {
 		method: "POST",
 		body: JSON.stringify({
@@ -53,51 +51,59 @@ async function createGDTypes(spaceId) {
 	const allOps = []
 
 	const { id: minSalaryId, ops: minSalaryOps} = grc20.Graph.createProperty({
-		name: "Minimum Salary",
+		name: "Minimum salary",
+		description: "The minimum salary, per pay period, that can be reasonably expected from a job position.",
 		type: "NUMBER"
 	})
 
 	const { id: maxSalaryId, ops: maxSalaryOps} = grc20.Graph.createProperty({
-		name: "Maximum Salary",
+		name: "Maximum salary",
+		description: "The maximum salary, per pay period, that can be reasonably expected from a job position.",
 		type: "NUMBER"
 	})
 
 	const { id: payPeriodId, ops: payPeriodOps} = grc20.Graph.createProperty({
-		name: "Pay Period",
-		type: "NUMBER"
+		name: "Pay period",
+		description: "The frequency of payments to the employee for holding a job.",
+		type: "TEXT"
 	})
 
 	const { id: reqSkillsId, ops: reqSkillsOps} = grc20.Graph.createProperty({
-		name: "Requires Skills",
+		name: "Requires",
+		description: "That which the entity requires.",
 		type: "RELATION"
 	})
 
 	const { id: employerId, ops: employerOps} = grc20.Graph.createProperty({
 		name: "Employer",
+		description: "An entity that employs.",
 		type: "RELATION"
 	})
 
 	const { id: jobTypeId, ops: jobTypeOps} = grc20.Graph.createType({
-		name: "Job Opening (Glassdoor)2",
+		name: "Job opening (Glassdoor)",
+		description: "A job opening seeking a qualified candidate (scraped from GlassDoor).",
 		properties: [grc20.SystemIds.NAME_ATTRIBUTE,
 			grc20.SystemIds.DESCRIPTION_ATTRIBUTE,
 			employerId,
-			grc20.ContentIds.LOCATION_ATTRIBUTE,
 			minSalaryId,
 			maxSalaryId,
 			payPeriodId,
 			reqSkillsId,
 			grc20.ContentIds.WEB_URL_ATTRIBUTE,
-			grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]
+			grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE,
+			grc20.ContentIds.CITIES_ATTRIBUTE,]
 	})
 
 	const { id: compRateId, ops: compRateOps} = grc20.Graph.createProperty({
-		name: "Company Rating (GlassDoor)",
+		name: "Company rating (GlassDoor)",
+		description: "The company rating, out of five stars, on GlassDoor.",
 		type: "NUMBER"
 	})
 
 	const { id: compTypeId, ops: compTypeOps} = grc20.Graph.createType({
-		name: "Company Profile (Glassdoor)2",
+		name: "Company profile (Glassdoor)",
+		description: "A company profile (scraped from GlassDoor).",
 		properties: [grc20.SystemIds.NAME_ATTRIBUTE,
 			grc20.SystemIds.DESCRIPTION_ATTRIBUTE,
 			grc20.ContentIds.AVATAR_ATTRIBUTE,
@@ -106,38 +112,44 @@ async function createGDTypes(spaceId) {
 			grc20.ContentIds.WEB_URL_ATTRIBUTE]
 	})
 
-	allOps.push(...minSalaryOps, ...maxSalaryOps, ...payPeriodOps, ...employerOps,
-	...reqSkillsOps, ...jobTypeOps, ...compRateOps, ...compTypeOps)
-
-	// add descriptions
-	const newPropIds = [minSalaryId, maxSalaryId, payPeriodId, employerId, reqSkillsId, jobTypeId, compTypeId, compRateId]
-	const descriptions = [
-		"The minimum salary, per pay period, that can be reasonably expected from a job position.",
-		"The maximum salary, per pay period, that can be reasonably expected from a job position.",
-		"The frequency of payments to the employee for holding a job.",
-		"Employer of the entity.",
-		"A required skill for the job opening or position.",
-		"A job opening seeking a qualified candidate (scraped from the GlassDoor website).",
-		"A company profile (scraped from the GlassDoor website).",
-		"The company rating out of 5 stars (scraped from the GlassDoor website)."
-	]
-
-	newPropIds.forEach((p, i) => {
-		allOps.push(
-			grc20.Triple.make({
-				entityId: p,
-				attributeId: grc20.SystemIds.DESCRIPTION_ATTRIBUTE,
-				value: { value: descriptions[i], type: "TEXT" }
-			})
-		)
+	const { id: skillTypeId, ops: skillTypeOps } = grc20.Graph.createType({
+		name: "Skill",
+		description: "A skill that one can have.",
+		properties: [grc20.SystemIds.NAME_ATTRIBUTE,
+			grc20.SystemIds.DESCRIPTION_ATTRIBUTE]
 	})
 
-	const txInfo = await publishOpsToSpace(spaceId, allOps, "Add Job Opening and Company types from GlassDoor")
+	const { id: sanFranId, ops: sanFranOps } = grc20.Graph.createEntity({
+		name: "San Francisco",
+		description: "A costal city in California.",
+		types: [grc20.ContentIds.CITY_TYPE]
+	})
+
+	allOps.push(...minSalaryOps, ...maxSalaryOps, ...payPeriodOps, ...employerOps,
+		...reqSkillsOps, ...jobTypeOps, ...compRateOps, ...compTypeOps, ...skillTypeOps,
+		...sanFranOps)
+
+	console.log("Newly created entities (copy-paste into main.js):", {
+		company: compTypeId,
+		jobOpening: jobTypeId,
+		skill: skillTypeId,
+		compRating: compRateId,
+		employer: employerId,
+		maxSalary: maxSalaryId,
+		minSalary: minSalaryId,
+		payPeriod: payPeriodId,
+		requires: reqSkillsId,
+		cities: {
+			"San Francisco": sanFranId
+		}
+	})
+
+	const txInfo = await publishOpsToSpace(spaceId, allOps, "Add Job opening, Company, and Requirement types (GlassDoor)")
 	return txInfo
 }
 
 // createSpace("Hackathon glassdoor jobs", "0xC3cAC1469abE025d5De1d944257CD0Ad71D93398").then(console.log)
-// createGDTypes("CVQRHcnE9S2XN8GqHeqkZV")
+// createGDTypes("CVQRHcnE9S2XN8GqHeqkZV").then(console.log)
 
 
 

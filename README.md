@@ -3,6 +3,7 @@ Job posting scraper that uploades data to [Geo Browser](https://www.geobrowser.i
 
 ## Description
 This is a web scraper that collects job postings from GlassDoor and publishes them on the decentralized knowledge graph [Geo](https://www.geobrowser.io). Currently it is still in testing, and instead uploads data to the [Geo Testnet](https://geogenesis-git-feat-testnet-geo-browser.vercel.app). Here is a high-level overview of how the whole routine works.
+
 ### Data Collection
 There are three APIs that are used:
 1. Autocomplete API from [Monster](https://www.monster.com)
@@ -22,3 +23,7 @@ You will need a `.env` file in the same directory as the `main.js` file to store
 
 ## Usage
 Generally, you want to run `node main` to do the main routine (collecting and uploading data). The `grc20-tools.js` file contains useful setup and management functions to interact with the data *ad hoc*.
+
+
+## Deployment
+This code is being tested at the ["Hackathon glassdoor jobs"](https://geogenesis-git-feat-testnet-geo-browser.vercel.app/space/CVQRHcnE9S2XN8GqHeqkZV) space on the testnet.

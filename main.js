@@ -15,35 +15,22 @@ require("dotenv").config()
 const GEO_ENT_IDS = {
 	// spaces
 	targetSpace: "CVQRHcnE9S2XN8GqHeqkZV",
-	// entities
-	company: "7ZpyzJE2Zh62FpmVu5Wkc1",
-	jobOpening: "RvttaELRF1CRagzW2ZajjT",
-	// attributes
-	employer: "QoFc3JhedpbXqbo7dcySVP",
-	minSalary: "GAXHVCav3evrBkWhWwD2K4",
-	maxSalary: "Mg4FEdvC8VskHT9kUyjDYK",
-	payPeriodId: "8zuGZYesZW4UMmSCTCnhNE",
-	reqSkills: "PouZHsLxKo9F7acqJ3Aggc",
-	compRating: "6mXHF5mmfk9nfUtudQdCgH",
-}
-
-// standard headers for scraping
-const STANDARD_HEADERS = {
-	"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1.1 Safari/605.1.1",
-	"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-	"Accept-Language": "en-US,en;q=0.5",
-	"Accept-Encoding": "gzip, deflate, br, zstd",
-	"DNT": "1",
-	"Sec-GPC": "1",
-	"Connection": "keep-alive",
-	"Upgrade-Insecure-Requests": "1",
-	"Upgrade-Insecure-Requests": "1",
-	"Sec-Fetch-Dest": "document",
-	"Sec-Fetch-Mode": "navigate",
-	"Sec-Fetch-Site": "none",
-	"Sec-Fetch-User": "?1",
-	"Priority": "u=0, i",
-	"TE": "trailers"
+	// entity types
+	company: "MjjKWSQhnZrSMqk3kdcp8s",
+	jobOpening: "XrATaWAAV8TpT3Miuho8QB",
+	skill: "3DrTkxF8UfNZMe68Dp9Zv2",
+	// attributes and relations
+	compRating: "CVRXNgt9nXG9aKrwbt2mUE",
+	employer: "LTspwW2EM5std2mTGbLR6B",
+	inCity: "BeyiZ6oLqLMaSXiG41Yxtf",
+	maxSalary: "Hzdj1gPAhKEE1pn84GdEcW",
+	minSalary: "YA6eJxicNjAaFAqrDTXgwj",
+	payPeriod: "88twyx5CVc5Y25SY2oUZah",
+	requires: "3G5QRUn5iJkkhzcWo69zYh",
+	// specific entities
+	cities: {
+		"San Francisco": grc20.ContentIds.CITY_TYPE // TODO: replace with actual SF ID, this is ID of City Type
+	}
 }
 
 // shuffle around node ciphers for scraping
@@ -69,7 +56,7 @@ async function getMonsterJobTitles(query) {
 	return resp.result.map(jt => jt.text).slice(0, 2)
 }
 
-async function getGlassDoorLocInfo(query) {
+function generateSeleniumDriver() {
 	const ffService = new firefox.ServiceBuilder(process.env.GECKO_DRIVER_PATH)
 	const ffOpts = new firefox.Options()
 		.setBinary(process.env.FIREFOX_BIN_PATH)
@@ -83,19 +70,19 @@ async function getGlassDoorLocInfo(query) {
 		.setFirefoxService(ffService)
 		.setFirefoxOptions(ffOpts)
 		.build()
+	return driver
+}
+
+async function getGlassDoorLocInfo(query) {
+	const driver = generateSeleniumDriver()
 	const thisUrl = "view-source:https://www.glassdoor.com/autocomplete/location?locationTypeFilters=CITY,STATE,COUNTRY&caller=jobs&term=" + query
-	var jsonStr = ""
-	try {
-		await driver.manage().deleteAllCookies()
-		console.log("Loading GD Loc info URL", thisUrl)
-		driver.executeScript("Object.defineProperty(navigator, 'webdriver', {get: () => false})")
-		await driver.get(thisUrl)
-		jsonStr = await driver.findElement(By.tagName("pre")).getAttribute("innerHTML")
-	} catch (e) {
-		console.error(e)
-	} finally {
-		driver.quit()
-	}
+
+	await driver.manage().deleteAllCookies()
+	console.log("Loading GD Loc info URL", thisUrl)
+	driver.executeScript("Object.defineProperty(navigator, 'webdriver', {get: () => false})")
+	await driver.get(thisUrl)
+	const jsonStr = await driver.findElement(By.tagName("pre")).getAttribute("innerHTML")
+	driver.quit()
 
 	const data = JSON.parse(jsonStr)[0]
 	const returnData = {
@@ -175,17 +162,7 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 			}
 		});
 
-		// salary //
 		const salaryData = thisJob.header.payPeriodAdjustedPay
-		// var salaryStr = ""
-		// if (salaryData !== null) {
-		// 	salaryStr = salaryData.p10 + " - " + salaryData.p90 + " " + thisJob.header.payCurrency
-		// 	if (thisJob.header.payPeriod == "ANNUAL") {
-		// 		salaryStr += "/year"
-		// 	} else if (thisJob.header.payPeriod == "HOURLY") {
-		// 		salaryStr += "/hour"
-		// 	}
-		// }
 
 		const procJob = {
 			title: thisJob.job.jobTitleText,
@@ -193,6 +170,7 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 			companyLogo: thisJob.overview.squareLogoUrl,
 			companyRating: thisJob.header.rating,
 			location: thisJob.header.locationName,
+			cityName: locInfo.cityName,
 			shortDescription: thisJob.job.descriptionFragmentsText.join("\n"),
 			minSalary: salaryData?.p10 ?? null,
 			maxSalary: salaryData?.p90 ?? null,
@@ -209,67 +187,116 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 	return {jobs: processedJobs, newCookie: extractCookiesFromHeaders(resp.headers)}
 }
 
+// gets the raw buffers of image URLs
+async function getImageBuffers(imageUrlList) {
+	const rawImgBuffList = []
+	const driver = generateSeleniumDriver()
+	await driver.manage().deleteAllCookies()
+	for (var i = 0; i < imageUrlList.length; i++) {
+		await driver.get(imageUrlList[i])
+		const imgElm = await driver.findElement(By.tagName("img"))
+		const imgData = await imgElm.takeScreenshot()
+		const imgBuff = Buffer.from(imgData, "base64")
+		rawImgBuffList.push(imgBuff)
+	}
+	return rawImgBuffList
+}
+
 // converts jobs to triplet ops for Geo GRC-20
-async function convertJobsToGeoOps(jobs) {
+async function convertJobsToGeoOps(jobs, compLogoBuffs) {
 	// cache of company names to Geo entity ID
 	const companyGeoIdCache = {}
+	// cache of job requirement to Geo entity ID
+	const jobReqGeoIdCache = {}
 
 	const allOps = []
 
 	for (var i = 0; i < jobs.length; i++) {
-		const thisId = grc20.Id.generate()
-
 		// get company entity or create it if it doesn't exist
 		var thisCompanyId = companyGeoIdCache[jobs[i].company]
 		if (thisCompanyId === undefined) {
-			const searchRes = await geoFuzzySearch(jobs[i].company)
+			const searchRes = await geoFuzzySearch(jobs[i].company, GEO_ENT_IDS.company)
 			if (searchRes.length == 0) { // no results
 				const compProps = {
-					[grc20.SystemIds.DESCRIPTION_ATTRIBUTE]: {value: "A company whose profile is scraped from the GlassDoor website.", type: "TEXT"},
-					[GEO_ENT_IDS.compRating]: {value: String(jobs[i].companyRating*10), type: "NUMBER"},
 					[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: "https://www.example.com", type: "URL"},
 				}
+				// set company rating if it is defined (zero is the placeholder value)
+				if (jobs[i].companyRating > 0) {
+					compProps[GEO_ENT_IDS.compRating] = {value: String(jobs[i].companyRating), type: "NUMBER"},
+				}
 
-				const imgResult = typeof jobs[i].companyLogo == "string" ? grc20.Image.make(jobs[i].companyLogo) : undefined
-				if (imgResult !== undefined) {
-					compProps[grc20.ContentIds.AVATAR_ATTRIBUTE] = {to: imgResult.imageId}
+				if (typeof jobs[i].companyLogo == "string") {
+					const imgResult = await grc20.Graph.createImage({blob: new Blob([compLogoBuffs[i], {type:"image/png"}])})
+					allOps.push(...imgResult.ops)
+					compProps[grc20.ContentIds.AVATAR_ATTRIBUTE] = {to: imgResult.id}
 				}
 
 				// create the company entity
 				const newComp = grc20.Graph.createEntity({
 					name: jobs[i].company,
+					description: "A company whose profile is cataloged from GlassDoor.",
 					types: [GEO_ENT_IDS.company],
 					properties: compProps
 				})
-				allOps.push(...newComp.ops)
 
 				thisCompanyId = newComp.id
+				companyGeoIdCache[jobs[i].company] = newComp.id
+				allOps.push(...newComp.ops)
 			} else {
 				thisCompanyId = results[0].id
 			}
 		}
 
-		console.log(jobs[i])
-		throw Error("fkgjk")
-
 		// create the job entity
 		const newJob = grc20.Graph.createEntity({
-			name: jobs[i].title,
+			name: `${jobs[i].title} @ ${jobs[i].company}`,
 			types: [GEO_ENT_IDS.jobOpening],
 			properties: {
 				// value attributes
 				[grc20.SystemIds.DESCRIPTION_ATTRIBUTE]: {value: jobs[i].shortDescription, type: "TEXT"},
-				[grc20.ContentIds.LOCATION_ATTRIBUTE]: {value: jobs[i].location, type: "TEXT"},
 				[GEO_ENT_IDS.minSalary]: {value: String(jobs[i].minSalary), type: "NUMBER"},
 				[GEO_ENT_IDS.maxSalary]: {value: String(jobs[i].maxSalary), type: "NUMBER"},
 				[GEO_ENT_IDS.payPeriod]: {value: jobs[i].payPeriod, type: "TEXT"},
 				[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: jobs[i].jobLink, type: "URL"},
 				[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: (new Date(jobs[i].approxPublishTime)).toISOString(), type: "TIME"},
 				// relation attributes
-				[GEO_ENT_IDS.employer]: {to: thisCompanyId}
+				[GEO_ENT_IDS.employer]: {to: thisCompanyId},
+				[grc20.ContentIds.CITIES_ATTRIBUTE]: {to: GEO_ENT_IDS.cities[jobs[i].cityName]}
 			}
 		})
+
 		allOps.push(...newJob.ops)
+
+		// set up required skills relations
+		for (var ii = 0; ii < jobs[i].requiredSkills.length; ii++) {
+			const thisSkillName = jobs[i].requiredSkills[ii]
+			var thisSkillId = jobReqGeoIdCache[thisSkillName]
+			if (thisSkillId == undefined) {
+				const searchRes = await geoFuzzySearch(thisSkillName, GEO_ENT_IDS.skill)
+				// create skill if it doesn't exist
+				if (searchRes.length == 0) {
+					const newSkill = grc20.Graph.createEntity({
+						name: thisSkillName,
+						description: "A skill cataloged from GlassDoor.",
+						types: [GEO_ENT_IDS.skill]
+					})
+
+					thisSkillId = newSkill.id
+					jobReqGeoIdCache[thisSkillName] = newSkill.id
+					allOps.push(...newSkill.ops)
+				} else {
+					thisSkillId = searchRes[0].id
+				}
+			}
+
+			const newSkillRelationOps = grc20.Relation.make({
+				relationTypeId: GEO_ENT_IDS.requires,
+				fromId: newJob.id,
+				toId: thisSkillId
+			})
+
+			allOps.push(newSkillRelationOps)
+		}
 	}
 
 	return allOps
@@ -342,8 +369,10 @@ async function main() {
 		//"requiredSkills", "otherAttributes", "jobLink"])
 
 	// upload to Geo
+	console.log("Downloading company logo images...")
+	const logoImgBuffs = await getImageBuffers(allJobs.map(j => j.companyLogo).filter(x => typeof x == "string"))
 	console.log("Getting GRC-20 triplet ops from jobs...")
-	const geoTripletOps = await convertJobsToGeoOps(allJobs)
+	const geoTripletOps = await convertJobsToGeoOps(allJobs, logoImgBuffs)
 	console.log("Uploading data to Geo...")
 	const txInfo = await publishOpsToSpace(GEO_ENT_IDS.targetSpace, geoTripletOps, "Add data from GlassDoor scrape")
 	console.log("Data uploaded! Transaction info:", txInfo)
@@ -404,11 +433,13 @@ function httpsFetch(urlStr, options) {
 	})
 }
 
-async function geoFuzzySearch(query) {
+// optionally pass a requiredType parameter to only return results that match the type
+async function geoFuzzySearch(query, requiredType = undefined) {
 	const response = await fetch(`https://api-testnet.grc-20.thegraph.com/search?q=${query}&network=TESTNET`)
 	const { results } = await response.json();
 	if (results === undefined) return []
-	return results
+	if (requiredType === undefined) return results
+	return results.filter(r => r.types.some(t => t.id == requiredType || t.name == requiredType))
 }
 
 function jsonToCsv(initData, filename, rows) {
