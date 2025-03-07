@@ -14,7 +14,7 @@ require("dotenv").config()
 // Geo entity IDs
 const GEO_ENT_IDS = {
 	// spaces
-	targetSpace: "CVQRHcnE9S2XN8GqHeqkZV",
+	targetSpace: process.env.GEO_TARGET_SPACE_ID,
 	// entity types
 	company: "MjjKWSQhnZrSMqk3kdcp8s",
 	jobOpening: "XrATaWAAV8TpT3Miuho8QB",
@@ -27,9 +27,10 @@ const GEO_ENT_IDS = {
 	minSalary: "YA6eJxicNjAaFAqrDTXgwj",
 	payPeriod: "88twyx5CVc5Y25SY2oUZah",
 	requires: "3G5QRUn5iJkkhzcWo69zYh",
+	yearEst: "3G5QRUn5iJkkhzcWo69zYh",
 	// specific entities
 	cities: {
-		"San Francisco": grc20.ContentIds.CITY_TYPE // TODO: replace with actual SF ID, this is ID of City Type
+		"San Francisco": process.env.GEO_TARGET_SPACE_ID // TODO: replace with actual SF ID
 	}
 }
 
@@ -63,7 +64,7 @@ function generateSeleniumDriver() {
 		.addArguments("--headless")
 		.addArguments("--width=1200")
 		.addArguments("--height=800")
-		.setPreference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.3" + String(Math.random()))
+		.setPreference("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.3" + String(Math.random()))
 		.setPreference("dom.webdriver.enabled", false)
 		.setPreference("useAutomationExtension", false)
 	const driver = new Builder().forBrowser("firefox")
@@ -82,7 +83,7 @@ async function getGlassDoorLocInfo(query) {
 	driver.executeScript("Object.defineProperty(navigator, 'webdriver', {get: () => false})")
 	await driver.get(thisUrl)
 	const jsonStr = await driver.findElement(By.tagName("pre")).getAttribute("innerHTML")
-	driver.quit()
+	await driver.quit()
 
 	const data = JSON.parse(jsonStr)[0]
 	const returnData = {
@@ -147,10 +148,11 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 	fs.writeFileSync("rawJobsGd.json", JSON.stringify(rawJobsData, null, 1))
 
 	const processedJobs = []
+	const processedCompanies = {}
 	for (var i = 0; i < rawJobsData.length; i++) {
 		const thisJob = rawJobsData[i]
 
-		// skills and attrs //
+		// Process job
 		const thisJobAttrHeader = thisJob.header.indeedJobAttribute
 		const skillsNames = []
 		const otherAttrs = []
@@ -164,17 +166,40 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 
 		const salaryData = thisJob.header.payPeriodAdjustedPay
 
+		var payPeriod = thisJob.header.payPeriod
+		// normalize capitalization
+		switch(payPeriod) {
+			case "ANNUAL":
+				payPeriod = "Annual"
+				break
+			case "HOURLY":
+				payPeriod = "Hourly"
+				break
+		}
+
+		// Process company
+		const compName = thisJob.header.employer.name ?? thisJob.header.employerNameFromSearch
+		processedCompanies[compName] ??= {
+			logo: thisJob.overview.squareLogoUrl,
+			rating: thisJob.header.rating,
+			revenue: thisJob.overview.revenue,
+			employees: thisJob.overview.size,
+			website: thisJob.overview.website,
+			yearFounded: thisJob.overview.yearFounded,
+		}
+		if (!processedCompanies[compName].website.startsWith("http")) {
+			processedCompanies[compName].website = "https://" + processedCompanies[compName].website
+		}
+
 		const procJob = {
 			title: thisJob.job.jobTitleText,
-			company: thisJob.header.employer.name ?? thisJob.header.employerNameFromSearch ?? "[Unknown]",
-			companyLogo: thisJob.overview.squareLogoUrl,
-			companyRating: thisJob.header.rating,
+			company: compName,
 			location: thisJob.header.locationName,
 			cityName: locInfo.cityName,
 			shortDescription: thisJob.job.descriptionFragmentsText.join("\n"),
 			minSalary: salaryData?.p10 ?? null,
 			maxSalary: salaryData?.p90 ?? null,
-			payPeriod: thisJob.header.payPeriod ?? null,
+			payPeriod: payPeriod ?? null,
 			payCurrency: thisJob.header.payCurrency ?? null,
 			requiredSkills: skillsNames,
 			otherAttributes: otherAttrs,
@@ -184,7 +209,7 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 		processedJobs.push(procJob)
 	}
 
-	return {jobs: processedJobs, newCookie: extractCookiesFromHeaders(resp.headers)}
+	return {companies: processedCompanies, jobs: processedJobs, newCookie: extractCookiesFromHeaders(resp.headers)}
 }
 
 // gets the raw buffers of image URLs
@@ -193,17 +218,22 @@ async function getImageBuffers(imageUrlList) {
 	const driver = generateSeleniumDriver()
 	await driver.manage().deleteAllCookies()
 	for (var i = 0; i < imageUrlList.length; i++) {
+		if (typeof imageUrlList[i] != "string") {
+			rawImgBuffList.push(undefined)
+			continue
+		}
 		await driver.get(imageUrlList[i])
 		const imgElm = await driver.findElement(By.tagName("img"))
 		const imgData = await imgElm.takeScreenshot()
 		const imgBuff = Buffer.from(imgData, "base64")
 		rawImgBuffList.push(imgBuff)
 	}
+	await driver.quit()
 	return rawImgBuffList
 }
 
 // converts jobs to triplet ops for Geo GRC-20
-async function convertJobsToGeoOps(jobs, compLogoBuffs) {
+async function convertJobsToGeoOps(jobs, companies) {
 	// cache of company names to Geo entity ID
 	const companyGeoIdCache = {}
 	// cache of job requirement to Geo entity ID
@@ -211,40 +241,66 @@ async function convertJobsToGeoOps(jobs, compLogoBuffs) {
 
 	const allOps = []
 
-	for (var i = 0; i < jobs.length; i++) {
+	// process companies first
+	for (const compName in companies) {
 		// get company entity or create it if it doesn't exist
-		var thisCompanyId = companyGeoIdCache[jobs[i].company]
+		const tc = companies[compName] // this company
+		var thisCompanyId = companyGeoIdCache[compName]
 		if (thisCompanyId === undefined) {
-			const searchRes = await geoFuzzySearch(jobs[i].company, GEO_ENT_IDS.company)
+			const searchRes = await geoFuzzySearch(compName, GEO_ENT_IDS.company)
 			if (searchRes.length == 0) { // no results
-				const compProps = {
-					[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: "https://www.example.com", type: "URL"},
-				}
+				const compProps = {}
 				// set company rating if it is defined (zero is the placeholder value)
-				if (jobs[i].companyRating > 0) {
-					compProps[GEO_ENT_IDS.compRating] = {value: String(jobs[i].companyRating), type: "NUMBER"},
+				if (tc.rating > 0) {
+					compProps[GEO_ENT_IDS.compRating] = {value: String(tc.rating), type: "NUMBER"}
 				}
 
-				if (typeof jobs[i].companyLogo == "string") {
-					const imgResult = await grc20.Graph.createImage({blob: new Blob([compLogoBuffs[i], {type:"image/png"}])})
+				if (tc.logoBuff !== undefined) {
+					const imgResult = await grc20.Graph.createImage({blob: new Blob([tc.logoBuff, {type:"image/png"}])})
 					allOps.push(...imgResult.ops)
 					compProps[grc20.ContentIds.AVATAR_ATTRIBUTE] = {to: imgResult.id}
 				}
 
+				if (typeof tc.yearFounded == "number") {
+					compProps[GEO_ENT_IDS.yearEst] = {value: String(tc.yearFounded), type: "NUMBER"}
+				}
+
+				if (typeof tc.website == "string") {
+					compProps[grc20.ContentIds.WEB_URL_ATTRIBUTE] = {value: tc.website, type: "URL"}
+				}
+
+				var description = "A company whose profile is cataloged from GlassDoor."
+				if (typeof tc.revenue == "string" && typeof tc.employees == "string") {
+					description += ` It has a revenue of about ${tc.revenue} and ${tc.employees}.`
+				}
+
 				// create the company entity
 				const newComp = grc20.Graph.createEntity({
-					name: jobs[i].company,
-					description: "A company whose profile is cataloged from GlassDoor.",
+					name: compName,
+					description: description,
 					types: [GEO_ENT_IDS.company],
 					properties: compProps
 				})
 
-				thisCompanyId = newComp.id
-				companyGeoIdCache[jobs[i].company] = newComp.id
+				companyGeoIdCache[compName] = newComp.id
 				allOps.push(...newComp.ops)
 			} else {
-				thisCompanyId = results[0].id
+				companyGeoIdCache[compName] = results[0].id
 			}
+		}
+	}
+
+	for (var i = 0; i < jobs.length; i++) {
+		var payCurrencyGeoId = ""
+		switch(jobs[i].payCurrency) {
+			case "USD":
+				payCurrencyGeoId = "2eGL8drmSYAqLoetcx3yR1"
+				break
+			case "EUR":
+				payCurrencyGeoId = "EWCAJP9TQoZ3EhcwyRg7mk"
+				break
+			default:
+				throw Error("Unknown currency " + jobs[i].payCurrency)
 		}
 
 		// create the job entity
@@ -254,13 +310,13 @@ async function convertJobsToGeoOps(jobs, compLogoBuffs) {
 			properties: {
 				// value attributes
 				[grc20.SystemIds.DESCRIPTION_ATTRIBUTE]: {value: jobs[i].shortDescription, type: "TEXT"},
-				[GEO_ENT_IDS.minSalary]: {value: String(jobs[i].minSalary), type: "NUMBER"},
-				[GEO_ENT_IDS.maxSalary]: {value: String(jobs[i].maxSalary), type: "NUMBER"},
+				[GEO_ENT_IDS.minSalary]: {value: String(jobs[i].minSalary), type: "NUMBER", options: {unit: payCurrencyGeoId}},
+				[GEO_ENT_IDS.maxSalary]: {value: String(jobs[i].maxSalary), type: "NUMBER", options: {unit: payCurrencyGeoId}},
 				[GEO_ENT_IDS.payPeriod]: {value: jobs[i].payPeriod, type: "TEXT"},
 				[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: jobs[i].jobLink, type: "URL"},
 				[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: (new Date(jobs[i].approxPublishTime)).toISOString(), type: "TIME"},
 				// relation attributes
-				[GEO_ENT_IDS.employer]: {to: thisCompanyId},
+				[GEO_ENT_IDS.employer]: {to: companyGeoIdCache[jobs[i].company]},
 				[grc20.ContentIds.CITIES_ATTRIBUTE]: {to: GEO_ENT_IDS.cities[jobs[i].cityName]}
 			}
 		})
@@ -322,6 +378,7 @@ async function main() {
 	const allJobHashes = []
 	var jobCt = [0, 0, 0] // count by city, job title, page
 	const jobCtLimits = [jobTitles.length, pageDepth] // job counting limits: job title, page
+	const allCompanies = {}
 
 	console.log("Getting city info...")
 	const cityInfoList = []
@@ -346,6 +403,9 @@ async function main() {
 					newJobCount ++
 				}
 			})
+			for (const newCompName in gdScrapeRes.companies) {
+				allCompanies[newCompName] ??= gdScrapeRes.companies[newCompName]
+			}
 			for (const key in gdScrapeRes.newCookie) {
 				gdCookie[key] = gdScrapeRes.newCookie[key]
 			}
@@ -370,9 +430,12 @@ async function main() {
 
 	// upload to Geo
 	console.log("Downloading company logo images...")
-	const logoImgBuffs = await getImageBuffers(allJobs.map(j => j.companyLogo).filter(x => typeof x == "string"))
+	const logoImgBuffs = await getImageBuffers(Object.values(allCompanies).map(c => c.logo))
+	Object.keys(allCompanies).forEach((c, i) => {
+		allCompanies[c].logoBuff = logoImgBuffs[i]
+	})
 	console.log("Getting GRC-20 triplet ops from jobs...")
-	const geoTripletOps = await convertJobsToGeoOps(allJobs, logoImgBuffs)
+	const geoTripletOps = await convertJobsToGeoOps(allJobs, allCompanies)
 	console.log("Uploading data to Geo...")
 	const txInfo = await publishOpsToSpace(GEO_ENT_IDS.targetSpace, geoTripletOps, "Add data from GlassDoor scrape")
 	console.log("Data uploaded! Transaction info:", txInfo)
