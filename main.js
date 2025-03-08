@@ -11,29 +11,53 @@ const grc20 = require("@graphprotocol/grc-20")
 const { publishOpsToSpace } = require("./grc20-tools.js")
 require("dotenv").config()
 
+const MAINNET = process.env.MAINNET === "true"
+
 // Geo entity IDs
-const GEO_ENT_IDS = {
-	// spaces
-	targetSpace: process.env.GEO_TARGET_SPACE_ID,
-	// entity types
-	company: "MjjKWSQhnZrSMqk3kdcp8s",
-	jobOpening: "XrATaWAAV8TpT3Miuho8QB",
-	skill: "3DrTkxF8UfNZMe68Dp9Zv2",
-	// attributes and relations
-	compRating: "CVRXNgt9nXG9aKrwbt2mUE",
-	employer: "LTspwW2EM5std2mTGbLR6B",
-	inCity: "BeyiZ6oLqLMaSXiG41Yxtf",
-	maxSalary: "Hzdj1gPAhKEE1pn84GdEcW",
-	minSalary: "YA6eJxicNjAaFAqrDTXgwj",
-	payPeriod: "88twyx5CVc5Y25SY2oUZah",
-	requires: "3G5QRUn5iJkkhzcWo69zYh",
-	yearEst: "3G5QRUn5iJkkhzcWo69zYh",
-	// specific entities
-	cities: {
-		"San Francisco": process.env.GEO_TARGET_SPACE_ID // TODO: replace with actual SF ID
+var GEO_ENT_IDS = null
+if (MAINNET) {
+	GEO_ENT_IDS = {
+		// spaces
+		targetSpace: process.env.GEO_TARGET_SPACE_ID,
+		// entity types
+		company: "9vk7Q3pz7US3s2KePFQrJT",
+		jobOpening: "RaMe9z4ZwLnHvMJeQL7ZNk",
+		skill: "LLx1gxshUy1TFKnSKVG9W6",
+		// attributes and relations
+		compRating: "4coPj4v66vSSrSSppZfCAh",
+		employer: "V7XvcnLXtbj7T2rvdNtKid",
+		maxSalary: "Fw48wUrm7oD9z4JbT2K4G2",
+		minSalary: "DQA5H2ffqiLGbSnSx27TtN",
+		payPeriod: "Q2rGKSbSwfqqDM4XXvezsm",
+		requires: "MCCkmuwQ7PY1GFYpgcmSHv",
+		yearEst: "MEsV4scGto8ZxoTz9n9KqD",
+		// specific entities
+		cities: {
+			"San Francisco": "3qayfdjYyPv1dAYf8gPL5r"
+		}
+	}
+} else {
+	GEO_ENT_IDS = {
+		// spaces
+		targetSpace: process.env.GEO_TARGET_SPACE_ID,
+		// entity types
+		company: "VNPsGf5Tw5QdPfDqZUoE7Q",
+		jobOpening: "DvKV4AvGNAyabVSwGLzEoC",
+		skill: "PCNrPCsgfsb2U56PAEgNNL",
+		// attributes and relations
+		compRating: "LNU7uRNRP2byCHuueNbauW",
+		employer: "EjXsGXDfQy52pamAJxus17",
+		maxSalary: "9LX5vDxtpRG9TS85TrYpYU",
+		minSalary: "XAocTpEE9LunqpBeX1puNV",
+		payPeriod: "MbB6MZUTDFL9F8zp52QHCQ",
+		requires: "G28b9ubwXVkyhjRjz6oyBf",
+		yearEst: "QkwpBtCnEukmvCnRwA8ooT",
+		// specific entities
+		cities: {
+			"San Francisco": "3sQ28X1isy9abvvRroVigx"
+		}
 	}
 }
-
 // shuffle around node ciphers for scraping
 const NC = crypto.constants.defaultCoreCipherList.split(":")
 const STANDARD_CIPHERS = shuffle(NC.slice(0, 3)).join(":") + ":" + shuffle(NC.slice(3, 9999)).join(":")
@@ -54,7 +78,7 @@ async function getMonsterJobTitles(query) {
 	    "method": "GET",
 	});
 	const resp = await req.json()
-	return resp.result.map(jt => jt.text).slice(0, 2)
+	return resp.result.map(jt => jt.text).slice(0, 1)
 }
 
 function generateSeleniumDriver() {
@@ -168,13 +192,17 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 
 		var payPeriod = thisJob.header.payPeriod
 		// normalize capitalization
-		switch(payPeriod) {
-			case "ANNUAL":
-				payPeriod = "Annual"
-				break
-			case "HOURLY":
-				payPeriod = "Hourly"
-				break
+		if (typeof payPeriod == "string") {
+			switch(payPeriod) {
+				case "ANNUAL":
+					payPeriod = "Annual"
+					break
+				case "HOURLY":
+					payPeriod = "Hourly"
+					break
+				default:
+					payPeriod = null
+			}
 		}
 
 		// Process company
@@ -187,7 +215,7 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 			website: thisJob.overview.website,
 			yearFounded: thisJob.overview.yearFounded,
 		}
-		if (!processedCompanies[compName].website.startsWith("http")) {
+		if (typeof processedCompanies[compName]?.website == "string" && !processedCompanies[compName].website.startsWith("http")) {
 			processedCompanies[compName].website = "https://" + processedCompanies[compName].website
 		}
 
@@ -199,7 +227,7 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 			shortDescription: thisJob.job.descriptionFragmentsText.join("\n"),
 			minSalary: salaryData?.p10 ?? null,
 			maxSalary: salaryData?.p90 ?? null,
-			payPeriod: payPeriod ?? null,
+			payPeriod: payPeriod,
 			payCurrency: thisJob.header.payCurrency ?? null,
 			requiredSkills: skillsNames,
 			otherAttributes: otherAttrs,
@@ -262,7 +290,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 				}
 
 				if (typeof tc.yearFounded == "number") {
-					compProps[GEO_ENT_IDS.yearEst] = {value: String(tc.yearFounded), type: "NUMBER"}
+					compProps[GEO_ENT_IDS.yearEst] = {value: `${tc.yearFounded}-01-01T00:00:00.000Z`, type: "TIME"}
 				}
 
 				if (typeof tc.website == "string") {
@@ -271,7 +299,13 @@ async function convertJobsToGeoOps(jobs, companies) {
 
 				var description = "A company whose profile is cataloged from GlassDoor."
 				if (typeof tc.revenue == "string" && typeof tc.employees == "string") {
-					description += ` It has a revenue of about ${tc.revenue} and ${tc.employees}.`
+					if (!tc.revenue.startsWith("Unknown") && !tc.employees.startsWith("Unknown")) {
+						description += ` ${compName} has a revenue of about ${tc.revenue}, with ${tc.employees}.`
+					} else if (!tc.revenue.startsWith("Unknown")) {
+						description += ` It has a revenue of about ${tc.revenue}.`
+					} else if (!tc.employees.startsWith("Unknown")) {
+						description += ` It has ${tc.revenue}.`
+					}
 				}
 
 				// create the company entity
@@ -285,7 +319,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 				companyGeoIdCache[compName] = newComp.id
 				allOps.push(...newComp.ops)
 			} else {
-				companyGeoIdCache[compName] = results[0].id
+				companyGeoIdCache[compName] = searchRes[0].id
 			}
 		}
 	}
@@ -304,24 +338,40 @@ async function convertJobsToGeoOps(jobs, companies) {
 		}
 
 		// create the job entity
+		const jobProps = {
+			// value attributes
+			[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: jobs[i].jobLink, type: "URL"},
+			[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: (new Date(jobs[i].approxPublishTime)).toISOString(), type: "TIME"},
+			// relation attributes
+			[GEO_ENT_IDS.employer]: {to: companyGeoIdCache[jobs[i].company]},
+			[grc20.ContentIds.CITIES_ATTRIBUTE]: {to: GEO_ENT_IDS.cities[jobs[i].cityName]}
+		}
+
+		if (typeof jobs[i].minSalary == "number") {
+			jobProps[GEO_ENT_IDS.minSalary] = {value: String(jobs[i].minSalary), type: "NUMBER", options: {unit: payCurrencyGeoId}}
+		}
+
+		if (typeof jobs[i].maxSalary == "number") {
+			jobProps[GEO_ENT_IDS.maxSalary] = {value: String(jobs[i].maxSalary), type: "NUMBER", options: {unit: payCurrencyGeoId}}
+		}
+
+		if (typeof jobs[i].payPeriod == "string") {
+			jobProps[GEO_ENT_IDS.payPeriod] = {value: jobs[i].payPeriod, type: "TEXT"}
+		}
+
+
 		const newJob = grc20.Graph.createEntity({
 			name: `${jobs[i].title} @ ${jobs[i].company}`,
 			types: [GEO_ENT_IDS.jobOpening],
-			properties: {
-				// value attributes
-				[grc20.SystemIds.DESCRIPTION_ATTRIBUTE]: {value: jobs[i].shortDescription, type: "TEXT"},
-				[GEO_ENT_IDS.minSalary]: {value: String(jobs[i].minSalary), type: "NUMBER", options: {unit: payCurrencyGeoId}},
-				[GEO_ENT_IDS.maxSalary]: {value: String(jobs[i].maxSalary), type: "NUMBER", options: {unit: payCurrencyGeoId}},
-				[GEO_ENT_IDS.payPeriod]: {value: jobs[i].payPeriod, type: "TEXT"},
-				[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: jobs[i].jobLink, type: "URL"},
-				[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: (new Date(jobs[i].approxPublishTime)).toISOString(), type: "TIME"},
-				// relation attributes
-				[GEO_ENT_IDS.employer]: {to: companyGeoIdCache[jobs[i].company]},
-				[grc20.ContentIds.CITIES_ATTRIBUTE]: {to: GEO_ENT_IDS.cities[jobs[i].cityName]}
-			}
+			properties: jobProps
 		})
 
-		allOps.push(...newJob.ops)
+		const textBlockOps = grc20.TextBlock.make({
+			fromId: newJob.id,
+			text: jobs[i].shortDescription
+		})
+
+		allOps.push(...newJob.ops, ...textBlockOps)
 
 		// set up required skills relations
 		for (var ii = 0; ii < jobs[i].requiredSkills.length; ii++) {
@@ -418,6 +468,11 @@ async function main() {
 	}
 
 	allJobs.length = 10
+	for (const compName in allCompanies) {
+		if (!allJobs.some(j => j.company == compName)) {
+			delete allCompanies[compName]
+		}
+	}
 
 	console.log("~~~Scraping metrics~~~")
 	console.log("Success ratio:", successCount, "/", totalCount)

@@ -20,6 +20,7 @@ You will need a `.env` file in the same directory as the `main.js` file to store
 * `FIREFOX_BIN_PATH`: Path to the Firefox binary.
 * `GEO_TARGET_SPACE_ID`: The space on Geo with which the data is associated.
 * `WEB3_PRIVATE_KEY`: Private key of a Web3 wallet that will do the smart contract calls.
+* `MAINNET` (optional): Set to `"true"` to use [Geo Gensis mainnet](https://www.geobrowser.io). All other values will be interpreted as `"false"`.
 
 ## Usage
 Generally, you want to run `node main` to do the main routine (collecting and uploading data). The `grc20-tools.js` file contains useful setup and management functions to interact with the data *ad hoc*.

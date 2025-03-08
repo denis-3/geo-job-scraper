@@ -2,8 +2,108 @@
 
 const grc20 = require("@graphprotocol/grc-20")
 const { getWallet } = require("./wallet.js")
+require("dotenv").config()
+const MAINNET = process.env.MAINNET === "true"
 
 // console.log(grc20)
+
+// gets triples and relations of entity
+async function getFullEntity(entityId) {
+	// this query is useful for debugging and instrospection
+	const introspectionGQL = `query {
+		__type(name: "Relation") {
+			name
+			fields {
+				name
+				type {
+					name
+					kind
+					ofType {
+						name
+						kind
+					}
+				}
+			}
+		}
+	}`
+
+	// actual Geo query to get all triples and relations of an entity
+	const entityGQL = `query {
+		entities(filter: {id: {equalTo: "${entityId}"}}) {
+			nodes {
+				name
+				triples {
+					nodes {
+						attributeId
+						valueType
+						numberValue
+						textValue
+						booleanValue
+						attribute {
+							name
+						}
+					}
+					totalCount
+				}
+				relationsByFromEntityId {
+					nodes {
+						typeOfId
+						toEntityId
+						typeOf {
+							name
+						}
+						entity {
+							id
+						}
+					}
+					totalCount
+				}
+			}
+		}
+	}`
+
+	const gqlEndpoint = MAINNET ? "https://hypergraph.up.railway.app/graphql" : "https://geo-conduit.up.railway.app/graphql"
+	const resp = await fetch(gqlEndpoint, {
+		method: "POST",
+		headers: {
+			"Accept": "application/graphql-response+json",
+			"Content-Type": "application/json"
+		},
+		body: JSON.stringify({
+			query: entityGQL
+		})
+	})
+
+	const json = await resp.json()
+	const entity = json.data.entities.nodes[0]
+	if (entity === undefined) return undefined
+	const returnData = {
+		name: entity.name,
+		id: entityId,
+		triples: [],
+		relations: []
+	}
+
+	entity.triples.nodes.forEach(t => {
+		returnData.triples.push({
+			id: t.attributeId,
+			valueType: t.valueType,
+			value: t.textValue ?? t.numberValue ?? t.booleanValue,
+			attributeName: t.attribute.name
+		})
+	})
+
+	entity.relationsByFromEntityId.nodes.forEach(r => {
+		returnData.relations.push({
+			id: r.entity.id,
+			typeId: r.typeOfId,
+			toEntityId: r.toEntityId,
+			relationName: r.typeOf.name
+		})
+	})
+
+	return returnData
+}
 
 async function createSpace(spaceName, initialEditor) {
 	const spaceId = await grc20.Graph.createSpace({
@@ -16,7 +116,7 @@ async function createSpace(spaceName, initialEditor) {
 }
 
 async function publishOpsToSpace(spaceId, ops, commitMessage) {
-	const wa = getWallet()
+	const wa = await getWallet()
 
 	// upload changes to IPFS
 	const ipfsCid = await grc20.Ipfs.publishEdit({
@@ -26,11 +126,11 @@ async function publishOpsToSpace(spaceId, ops, commitMessage) {
 	})
 
 	// get TX info
-	const resp = await fetch(`https://api-testnet.grc-20.thegraph.com/space/${spaceId}/edit/calldata`, {
+	var resp = await fetch(`https://api-testnet.grc-20.thegraph.com/space/${spaceId}/edit/calldata`, {
 		method: "POST",
 		body: JSON.stringify({
 			cid: ipfsCid,
-			network: "TESTNET",
+			network: MAINNET ? "MAINNET" : "TESTNET",
 		})
 	})
 
@@ -44,6 +144,24 @@ async function publishOpsToSpace(spaceId, ops, commitMessage) {
 	})
 
 	return publishTx
+}
+
+// call getEntityTriples() above, then pass the result into here to get ops
+function deleteEntity(entityObj) {
+	const delOps = []
+
+	entityObj.triples.forEach(t => {
+		delOps.push(grc20.Triple.remove({
+			entityId: entityObj.id,
+			attributeId: t.id
+		}))
+	})
+
+	entityObj.relations.forEach(r => {
+		delOps.push(grc20.Relation.remove(r.id))
+	})
+
+	return delOps
 }
 
 // creates glassdoor job and glassdoor company type
@@ -102,9 +220,9 @@ async function createGDTypes(spaceId) {
 	})
 
 	const { id: foundedId, ops: foundedOps } = grc20.Graph.createProperty({
-		name: "Year estblished",
-		description: "The year that the entity was established.",
-		type: "NUMBER"
+		name: "Date estblished",
+		description: "The date that the entity was established.",
+		type: "TIME"
 	})
 
 	const { id: compTypeId, ops: compTypeOps} = grc20.Graph.createType({
@@ -133,8 +251,8 @@ async function createGDTypes(spaceId) {
 	})
 
 	allOps.push(...minSalaryOps, ...maxSalaryOps, ...payPeriodOps, ...employerOps,
-		...reqSkillsOps, ...jobTypeOps, ...compRateOps, ...compTypeOps, ...skillTypeOps,
-		...sanFranOps, ...foundedId)
+		...reqSkillsOps, ...foundedOps, ...jobTypeOps, ...compRateOps, ...compTypeOps, ...skillTypeOps,
+		...sanFranOps)
 
 	console.log("Newly created entities (copy-paste into main.js):", {
 		company: compTypeId,
@@ -147,18 +265,70 @@ async function createGDTypes(spaceId) {
 		payPeriod: payPeriodId,
 		requires: reqSkillsId,
 		yearEst: foundedId,
-		cities: {
-			"San Francisco": sanFranId
-		}
+		// cities: {
+		// 	"San Francisco": sanFranId
+		// }
 	})
 
 	const txInfo = await publishOpsToSpace(spaceId, allOps, "Add Job opening, Company, and Requirement types (GlassDoor)")
 	return txInfo
 }
 
-// createSpace("Hackathon glassdoor jobs", "0xC3cAC1469abE025d5De1d944257CD0Ad71D93398").then(console.log)
-// createGDTypes("CVQRHcnE9S2XN8GqHeqkZV").then(console.log)
+// some supplementary properties for mainnet
+async function createMainnetSupplement(spaceId) {
+	const { id: payPeriodId, ops: payPeriodOps } = grc20.Graph.createProperty({
+		name: "Pay period",
+		description: "The frequency of payments to the employee for holding a job.",
+		type: "TEXT"
+	})
+
+	const { id: compRateId, ops: compRateOps} = grc20.Graph.createProperty({
+		name: "Company rating (GlassDoor)",
+		description: "The company rating, out of five stars, on GlassDoor.",
+		type: "NUMBER"
+	})
+
+	const { id: foundedId, ops: foundedOps } = grc20.Graph.createProperty({
+		name: "Date established",
+		description: "The date that the entity was established.",
+		type: "TIME"
+	})
+
+	const allOps = [
+		...payPeriodOps, ...compRateOps, ...foundedOps
+	]
+
+	console.log("New property IDs", {
+		compRating: compRateId,
+		payPeriod: payPeriodId,
+		yearEst: foundedId,
+	})
+
+	const txInfo = await publishOpsToSpace(spaceId, allOps, "Add Pay period, Company rating, and Date established properties")
+	return txInfo
+}
+
+if (require.main === module) {
+	async function main() {
+		const wa = await getWallet()
+
+		// createSpace("Hackathon glassdoor jobs", wa.address).then(console.log)
+
+		// createGDTypes(process.env.GEO_TARGET_SPACE_ID).then(console.log)
+
+		// const entity = await getFullEntity("PJYJrgcQz5hKQr9V1YAD7F")
+		// const deleteOps = deleteEntity(entity)
+		// await publishOpsToSpace(process.env.GEO_TARGET_SPACE_ID, deleteOps, "Test delete entity")
+
+		createMainnetSupplement(process.env.GEO_TARGET_SPACE_ID).then(console.log)
+
+	}
+	main()
+}
 
 
 
-module.exports = { publishOpsToSpace }
+module.exports = {
+	publishOpsToSpace,
+	deleteEntity
+}
