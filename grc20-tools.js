@@ -202,7 +202,8 @@ async function geoFuzzySearch(queryTerm, requiredType = undefined) {
 			}
 		}
 	}`
-	const data = await getEntitiesByGraphQL(searchByTypeId)
+	const data = await getEntitiesByGraphQL(searchByName)
+	if (requiredType === undefined) return data
 	return data.filter(e => e.relations.some(r => r.typeId == grc20.SystemIds.TYPES_ATTRIBUTE && r.toEntityId == requiredType))
 }
 
@@ -298,19 +299,19 @@ async function createGDTypes(spaceId) {
 	})
 
 	const { id: reqSkillsId, ops: reqSkillsOps } = grc20.Graph.createProperty({
-		name: "Requires",
-		description: "That which the entity requires.",
+		name: "Skills",
+		description: "A skill associated with an entity.",
 		type: "RELATION"
 	})
 
 	const { id: employerId, ops: employerOps } = grc20.Graph.createProperty({
 		name: "Employer",
-		description: "An entity that employs.",
+		description: "That which employs, or is the employer of, the entity.",
 		type: "RELATION"
 	})
 
 	const { id: jobTypeId, ops: jobTypeOps} = grc20.Graph.createType({
-		name: "Job opening (Glassdoor)",
+		name: "Job opening",
 		description: "A job opening seeking a qualified candidate (scraped from GlassDoor).",
 		properties: [grc20.SystemIds.NAME_ATTRIBUTE,
 			grc20.SystemIds.DESCRIPTION_ATTRIBUTE,
@@ -321,7 +322,8 @@ async function createGDTypes(spaceId) {
 			reqSkillsId,
 			grc20.ContentIds.WEB_URL_ATTRIBUTE,
 			grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE,
-			grc20.ContentIds.CITIES_ATTRIBUTE]
+			grc20.ContentIds.LOCATION_ATTRIBUTE,
+			"BLCNN8nrcU6T6NLu2QDQtw"] // employment type
 	})
 
 	const { id: compRateId, ops: compRateOps} = grc20.Graph.createProperty({
@@ -331,13 +333,13 @@ async function createGDTypes(spaceId) {
 	})
 
 	const { id: foundedId, ops: foundedOps } = grc20.Graph.createProperty({
-		name: "Date estblished",
+		name: "Date established",
 		description: "The date that the entity was established.",
 		type: "TIME"
 	})
 
 	const { id: compTypeId, ops: compTypeOps} = grc20.Graph.createType({
-		name: "Company (Glassdoor)",
+		name: "Company",
 		description: "A company profile (scraped from GlassDoor).",
 		properties: [grc20.SystemIds.NAME_ATTRIBUTE,
 			grc20.SystemIds.DESCRIPTION_ATTRIBUTE,
@@ -348,13 +350,6 @@ async function createGDTypes(spaceId) {
 			foundedId]
 	})
 
-	const { id: skillTypeId, ops: skillTypeOps } = grc20.Graph.createType({
-		name: "Skill",
-		description: "A skill that one can have.",
-		properties: [grc20.SystemIds.NAME_ATTRIBUTE,
-			grc20.SystemIds.DESCRIPTION_ATTRIBUTE]
-	})
-
 	const { id: sanFranId, ops: sanFranOps } = grc20.Graph.createEntity({
 		name: "San Francisco",
 		description: "A costal city in California.",
@@ -362,13 +357,12 @@ async function createGDTypes(spaceId) {
 	})
 
 	allOps.push(...minSalaryOps, ...maxSalaryOps, ...payPeriodOps, ...employerOps,
-		...reqSkillsOps, ...foundedOps, ...jobTypeOps, ...compRateOps, ...compTypeOps, ...skillTypeOps,
-		...sanFranOps)
+		/*...reqSkillsOps,*/ ...foundedOps, ...jobTypeOps, ...compRateOps, ...compTypeOps,
+		/*...sanFranOps*/)
 
 	console.log("Newly created entities (copy-paste into main.js):", {
 		company: compTypeId,
 		jobOpening: jobTypeId,
-		skill: skillTypeId,
 		compRating: compRateId,
 		employer: employerId,
 		maxSalary: maxSalaryId,
@@ -381,7 +375,7 @@ async function createGDTypes(spaceId) {
 		// }
 	})
 
-	const txInfo = await publishOpsToSpace(spaceId, allOps, "Add Job opening, Company, and Requirement types (GlassDoor)")
+	const txInfo = await publishOpsToSpace(spaceId, allOps, "Setup types related to Job opening and Company (GlassDoor)")
 	return txInfo
 }
 
@@ -390,25 +384,25 @@ async function createMainnetSupplement(spaceId) {
 	const { id: fullTimeId, ops: ftOps } = grc20.Graph.createEntity({
 		name: "Full-time",
 		description: "Full-time employment.",
-		types: ["UZJEi1nNA7NKys64rJoHKA"]
+		types: ["BLCNN8nrcU6T6NLu2QDQtw"]
 	})
 
 	const { id: inpersonId, ops: ipOps } = grc20.Graph.createEntity({
 		name: "In-person",
 		description: "In-person work, such that the employee must be physically present at an office or other work location.",
-		types: ["UZJEi1nNA7NKys64rJoHKA"]
+		types: ["BLCNN8nrcU6T6NLu2QDQtw"]
 	})
 
 	const { id: hybridId, ops: hybOps } = grc20.Graph.createEntity({
 		name: "Hybrid",
 		description: "A hybrid work form, combining in-person and remote aspects. Employees can sometimes choose how to work, or employers can set specific remote and in-person requirements.",
-		types: ["UZJEi1nNA7NKys64rJoHKA"]
+		types: ["BLCNN8nrcU6T6NLu2QDQtw"]
 	})
 
 	const { id: remoteId, ops: remtOps } = grc20.Graph.createEntity({
 		name: "Remote",
 		description: "A form of work which happens entirely out of an employer's offices. It is sometimes called \"virtual\" work or \"work from home.\"",
-		types: ["UZJEi1nNA7NKys64rJoHKA"]
+		types: ["BLCNN8nrcU6T6NLu2QDQtw"]
 	})
 
 	console.log("IDs of new employment types", {
@@ -424,6 +418,51 @@ async function createMainnetSupplement(spaceId) {
 	return txInfo
 }
 
+async function addTableToSpace(tableName, tableFilter, spaceId, spaceEntityId) {
+	const tableId = await grc20.Id.generate()
+	const tableOps = [
+		// set up table
+		grc20.Relation.make({
+			relationTypeId: grc20.SystemIds.TYPES_ATTRIBUTE,
+			fromId: tableId,
+			toId: "PnQsGwnnztrLNRCm9mcKKY" // data block (table)
+		}),
+		// name the table
+		grc20.Triple.make({
+			attributeId: grc20.SystemIds.NAME_ATTRIBUTE,
+			entityId: tableId,
+			value: {
+				value: tableName,
+				type: "TEXT"
+			}
+		}),
+		// set data source
+		grc20.Relation.make({
+			relationTypeId: "4sz7Kx91uq4KBW5sohjLkj", // Data source type
+			fromId: tableId,
+			toId: "8HkP7HCufp2HcCFajuJFcq" // Query data source
+		}),
+		// set the filter
+		grc20.Triple.make({
+			attributeId: "3YqoLJ7uAPmthXyXmXKoSa", // Filter
+			entityId: tableId,
+			value: {
+				value: tableFilter,
+				type: "TEXT"
+			}
+		}),
+		// add content block to the space
+		grc20.Relation.make({
+			relationTypeId: "QYbjCM6NT9xmh2hFGsqpQX", // Blocks
+			fromId: spaceEntityId,
+			toId: tableId
+		})
+	]
+
+	const tx = await publishOpsToSpace(spaceId, tableOps, "Add table")
+	return tx
+}
+
 if (require.main === module) {
 	async function main() {
 		// const wa = await getWallet()
@@ -432,7 +471,7 @@ if (require.main === module) {
 
 		// createGDTypes(process.env.GEO_TARGET_SPACE_ID).then(console.log)
 
-		// const entitiesToRemove = ["LNU7uRNRP2byCHuueNbauW"]
+		// const entitiesToRemove = ["6rmkf4QJ6amYBCEwtfq39e", "2jJifyvC5YoFDYEShUqfDb"]
 		// for (var i = 0; i < entitiesToRemove.length; i++) {
 		// 	entitiesToRemove[i] = await getGeoEntityById(entitiesToRemove[i])
 		// }
@@ -440,9 +479,9 @@ if (require.main === module) {
 		// entitiesToRemove.forEach(e => {
 		// 	if (e != undefined) deleteOps.push(...deleteEntity(e))
 		// })
-		// await publishOpsToSpace(process.env.GEO_TARGET_SPACE_ID, deleteOps, "Remove types").then(console.log)
+		// await publishOpsToSpace(process.env.GEO_TARGET_SPACE_ID, deleteOps, "Remove tables").then(console.log)
 
-		// const typeToRemove = "UnmvBcTRGe3P5HQ885hMMm"
+		// const typeToRemove = "PCNrPCsgfsb2U56PAEgNNL"
 		// const entsOfType = await getGeoEntitiesByType(typeToRemove)
 		// const delOps = []
 		// entsOfType.forEach(e => {
@@ -457,6 +496,8 @@ if (require.main === module) {
 		// getGeoEntityIdsByAttributeValue("MbB6MZUTDFL9F8zp52QHCQ", "Annual").then(console.log)
 
 		// getGeoEntitiesByType("7ZpyzJE2Zh62FpmVu5Wkc1").then(console.log)
+
+		// addTableToSpace("Companies", '{"where":{"AND":[{"attribute":"Jfmby78N4BCseZinBmdVov","is":"FfaawFDkXPFCREizUeoAGr"}]}}', process.env.GEO_TARGET_SPACE_ID, "CJ7B5sYCd86sYP7pda6gHi").then(console.log)
 	}
 	main()
 }

@@ -47,28 +47,28 @@ if (MAINNET) {
 		// spaces
 		targetSpace: process.env.GEO_TARGET_SPACE_ID,
 		// entity types
-		company: "VNPsGf5Tw5QdPfDqZUoE7Q",
-		jobOpening: "DvKV4AvGNAyabVSwGLzEoC",
-		skill: "PCNrPCsgfsb2U56PAEgNNL",
+		company: "FfaawFDkXPFCREizUeoAGr",
+		jobOpening: "8qLhn73tAYAzzV7zXw16oq",
+		skill: "LLx1gxshUy1TFKnSKVG9W6",
 		// attributes and relations
-		compRating: "LNU7uRNRP2byCHuueNbauW",
-		employer: "EjXsGXDfQy52pamAJxus17",
-		maxSalary: "9LX5vDxtpRG9TS85TrYpYU",
-		minSalary: "XAocTpEE9LunqpBeX1puNV",
-		payPeriod: "MbB6MZUTDFL9F8zp52QHCQ",
+		compRating: "2nmhNqZh4PPESxnJiYbUmm",
+		employer: "Rx4CyKcyYBBoYNitxV9EFa",
+		maxSalary: "TTDMDLnFxRuMCZQ8jG9Z1i",
+		minSalary: "KKX1RCvBJY6ygbi5oNmqtC",
+		payPeriod: "Xw21jBrkjx8aDcEuwHhJfD",
 		requires: "MCCkmuwQ7PY1GFYpgcmSHv",
-		yearEst: "QkwpBtCnEukmvCnRwA8ooT",
-		employmentType: "UZJEi1nNA7NKys64rJoHKA",
+		yearEst: "B7uF3YYNWjkMJvTVBKWDgG",
+		employmentType: "BLCNN8nrcU6T6NLu2QDQtw",
 		// specific entities
 		cities: {
 			"Bay Area": "RHoJT3hNVaw7m5fLLtZ8WQ", // this is actually California
 			"San Francisco": "3sQ28X1isy9abvvRroVigx"
 		},
 		employmentTypes: {
-			"Full-time": "Gugc617LVgm1p947PepQB3",
-			"In-person": "4gG7KCx4mSGTCGKy8Pnrkb",
-			"Hybrid work": "TgQMYGnLN2SU4WKwGd2DUk",
-			"Remote": "JgeqexTNyJ7fSMtavBYs8"
+			"Full-time": "HU5ENnhnC9T17wygLxgypr",
+			"In-person": "3QNTsFttzYFNxeGu7KHygD",
+			"Hybrid work": "VGiWcX7DiXZmv2bzAaMxWE",
+			"Remote": "QBKxqZbaX41hEu6XjWC6qv"
 		}
 	}
 }
@@ -374,7 +374,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 
 		// add some extra properties if applicable
 		if (jobs[i].company != "Confidential" && typeof jobs[i].company == "string") {
-			jobProps[GEO_ENT_IDS.employer] = {to: companyGeoIdCache[jobs[i].company]},
+			jobProps[GEO_ENT_IDS.employer] = {to: companyGeoIdCache[jobs[i].company]}
 		}
 
 		if (typeof jobs[i].minSalary == "number") {
@@ -465,7 +465,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 
 async function main() {
 	// main scrape config
-	const letters = "s".split("")
+	const letters = "sea".split("")
 	const cityList = ["San Francisco"]
 	const pageDepth = 1
 
@@ -522,7 +522,6 @@ async function main() {
 		}
 	}
 
-	allJobs.length = 10
 	for (const compName in allCompanies) {
 		if (!allJobs.some(j => j.company == compName)) {
 			delete allCompanies[compName]
