@@ -8,7 +8,11 @@ const https = require("https")
 const http2 = require("http2")
 const url = require("url")
 const grc20 = require("@graphprotocol/grc-20")
-const { publishOpsToSpace } = require("./grc20-tools.js")
+const {
+	publishOpsToSpace,
+	getGeoEntityIdsByAttributeValue,
+	geoFuzzySearch
+} = require("./grc20-tools.js")
 require("dotenv").config()
 
 const MAINNET = process.env.MAINNET === "true"
@@ -31,8 +35,10 @@ if (MAINNET) {
 		payPeriod: "Q2rGKSbSwfqqDM4XXvezsm",
 		requires: "MCCkmuwQ7PY1GFYpgcmSHv",
 		yearEst: "MEsV4scGto8ZxoTz9n9KqD",
+		employmentType: "BLCNN8nrcU6T6NLu2QDQtw",
 		// specific entities
 		cities: {
+			"Bay Area": "W5ZEpuy3Tij1XSXtJLruQ5",
 			"San Francisco": "3qayfdjYyPv1dAYf8gPL5r"
 		}
 	}
@@ -50,11 +56,19 @@ if (MAINNET) {
 		maxSalary: "9LX5vDxtpRG9TS85TrYpYU",
 		minSalary: "XAocTpEE9LunqpBeX1puNV",
 		payPeriod: "MbB6MZUTDFL9F8zp52QHCQ",
-		requires: "G28b9ubwXVkyhjRjz6oyBf",
+		requires: "MCCkmuwQ7PY1GFYpgcmSHv",
 		yearEst: "QkwpBtCnEukmvCnRwA8ooT",
+		employmentType: "UZJEi1nNA7NKys64rJoHKA",
 		// specific entities
 		cities: {
+			"Bay Area": "RHoJT3hNVaw7m5fLLtZ8WQ", // this is actually California
 			"San Francisco": "3sQ28X1isy9abvvRroVigx"
+		},
+		employmentTypes: {
+			"Full-time": "Gugc617LVgm1p947PepQB3",
+			"In-person": "4gG7KCx4mSGTCGKy8Pnrkb",
+			"Hybrid work": "TgQMYGnLN2SU4WKwGd2DUk",
+			"Remote": "JgeqexTNyJ7fSMtavBYs8"
 		}
 	}
 }
@@ -201,7 +215,7 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 					payPeriod = "Hourly"
 					break
 				default:
-					payPeriod = null
+					throw Error("Unknown pay period: ", + payPeriod)
 			}
 		}
 
@@ -264,6 +278,8 @@ async function getImageBuffers(imageUrlList) {
 async function convertJobsToGeoOps(jobs, companies) {
 	// cache of company names to Geo entity ID
 	const companyGeoIdCache = {}
+	// cache of company IDs to their avatar
+	const companyGeoAvatarIdCache = {}
 	// cache of job requirement to Geo entity ID
 	const jobReqGeoIdCache = {}
 
@@ -283,8 +299,9 @@ async function convertJobsToGeoOps(jobs, companies) {
 					compProps[GEO_ENT_IDS.compRating] = {value: String(tc.rating), type: "NUMBER"}
 				}
 
+				var imgResult = null
 				if (tc.logoBuff !== undefined) {
-					const imgResult = await grc20.Graph.createImage({blob: new Blob([tc.logoBuff, {type:"image/png"}])})
+					imgResult = await grc20.Graph.createImage({blob: new Blob([tc.logoBuff, {type:"image/png"}])})
 					allOps.push(...imgResult.ops)
 					compProps[grc20.ContentIds.AVATAR_ATTRIBUTE] = {to: imgResult.id}
 				}
@@ -304,7 +321,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 					} else if (!tc.revenue.startsWith("Unknown")) {
 						description += ` It has a revenue of about ${tc.revenue}.`
 					} else if (!tc.employees.startsWith("Unknown")) {
-						description += ` It has ${tc.revenue}.`
+						description += ` It has ${tc.employees}.`
 					}
 				}
 
@@ -316,15 +333,21 @@ async function convertJobsToGeoOps(jobs, companies) {
 					properties: compProps
 				})
 
+				// save the new company id and avatar id to cache
 				companyGeoIdCache[compName] = newComp.id
+				companyGeoAvatarIdCache[newComp.id] = imgResult?.id
 				allOps.push(...newComp.ops)
 			} else {
+				// save the found company id and avatar id to cache
 				companyGeoIdCache[compName] = searchRes[0].id
+				companyGeoAvatarIdCache[searchRes[0].id] = searchRes[0].relations.find(r => r.typeId == grc20.ContentIds.AVATAR_ATTRIBUTE)?.toEntityId
 			}
 		}
 	}
 
 	for (var i = 0; i < jobs.length; i++) {
+		const jobLinkQuery = await getGeoEntityIdsByAttributeValue(grc20.ContentIds.WEB_URL_ATTRIBUTE, jobs[i].jobLink)
+		if (jobLinkQuery.length > 0) continue // TODO: Later, the code should update job postings
 		var payCurrencyGeoId = ""
 		switch(jobs[i].payCurrency) {
 			case "USD":
@@ -337,14 +360,21 @@ async function convertJobsToGeoOps(jobs, companies) {
 				throw Error("Unknown currency " + jobs[i].payCurrency)
 		}
 
+		const jobPublishTime = (new Date(jobs[i].approxPublishTime))
+			.toISOString()
+			.slice(0, 11) + "00:00:00.000Z"
 		// create the job entity
 		const jobProps = {
 			// value attributes
 			[grc20.ContentIds.WEB_URL_ATTRIBUTE]: {value: jobs[i].jobLink, type: "URL"},
-			[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: (new Date(jobs[i].approxPublishTime)).toISOString(), type: "TIME"},
+			[grc20.ContentIds.PUBLISH_DATE_ATTRIBUTE]: {value: jobPublishTime, type: "TIME"},
 			// relation attributes
-			[GEO_ENT_IDS.employer]: {to: companyGeoIdCache[jobs[i].company]},
-			[grc20.ContentIds.CITIES_ATTRIBUTE]: {to: GEO_ENT_IDS.cities[jobs[i].cityName]}
+			[grc20.ContentIds.LOCATION_ATTRIBUTE]: {to: GEO_ENT_IDS.cities["Bay Area"]}
+		}
+
+		// add some extra properties if applicable
+		if (jobs[i].company != "Confidential" && typeof jobs[i].company == "string") {
+			jobProps[GEO_ENT_IDS.employer] = {to: companyGeoIdCache[jobs[i].company]},
 		}
 
 		if (typeof jobs[i].minSalary == "number") {
@@ -359,6 +389,10 @@ async function convertJobsToGeoOps(jobs, companies) {
 			jobProps[GEO_ENT_IDS.payPeriod] = {value: jobs[i].payPeriod, type: "TEXT"}
 		}
 
+		const compAvatarId = companyGeoAvatarIdCache[companyGeoIdCache[jobs[i].company]]
+		if (typeof compAvatarId == "string") {
+			jobProps[grc20.ContentIds.AVATAR_ATTRIBUTE] = {to: compAvatarId}
+		}
 
 		const newJob = grc20.Graph.createEntity({
 			name: `${jobs[i].title} @ ${jobs[i].company}`,
@@ -372,6 +406,27 @@ async function convertJobsToGeoOps(jobs, companies) {
 		})
 
 		allOps.push(...newJob.ops, ...textBlockOps)
+
+		// additionally add San Francisco if job is in it
+		if (jobs[i].location.includes("San Francisco")) {
+			allOps.push(grc20.Relation.make({
+				fromId: newJob.id,
+				relationTypeId: grc20.ContentIds.LOCATION_ATTRIBUTE,
+				toId: GEO_ENT_IDS.cities["San Francisco"]
+			}))
+		}
+
+		// finally, check other attributes
+		for (var ii = 0; ii < jobs[i].otherAttributes.length; ii++) {
+			const otherAttr = jobs[i].otherAttributes[ii]
+			if (GEO_ENT_IDS.employmentTypes[otherAttr] !== undefined) {
+				allOps.push(grc20.Relation.make({
+					fromId: newJob.id,
+					relationTypeId: GEO_ENT_IDS.employmentType,
+					toId: GEO_ENT_IDS.employmentTypes[otherAttr]
+				}))
+			}
+		}
 
 		// set up required skills relations
 		for (var ii = 0; ii < jobs[i].requiredSkills.length; ii++) {
@@ -410,7 +465,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 
 async function main() {
 	// main scrape config
-	const letters = "e".split("")
+	const letters = "s".split("")
 	const cityList = ["San Francisco"]
 	const pageDepth = 1
 
@@ -446,7 +501,7 @@ async function main() {
 			const gdScrapeRes = await scrapeGlassDoor(jobTitles[jobCt[1]], cityInfoList[jobCt[0]], 30, jobCt[2], gdCookie)
 			var newJobCount = 0
 			gdScrapeRes.jobs.forEach(j => {
-				const jHash = quickSha256(j.title + j.jobLink)
+				const jHash = quickSha256(j.jobLink)
 				if (!allJobHashes.includes(jHash)) {
 					allJobs.push(j)
 					allJobHashes.push(jHash)
@@ -498,14 +553,6 @@ async function main() {
 
 main()
 
-async function millis(ct) {
-	return new Promise((resolve, reject) => {
-		setTimeout(() => {
-			resolve()
-		}, ct)
-	})
-}
-
 // fetch with https library
 function httpsFetch(urlStr, options) {
 	console.log("Requesting URL", urlStr)
@@ -549,15 +596,6 @@ function httpsFetch(urlStr, options) {
 		if (options.method == "POST") req.write(options.body)
 		req.end()
 	})
-}
-
-// optionally pass a requiredType parameter to only return results that match the type
-async function geoFuzzySearch(query, requiredType = undefined) {
-	const response = await fetch(`https://api-testnet.grc-20.thegraph.com/search?q=${query}&network=TESTNET`)
-	const { results } = await response.json();
-	if (results === undefined) return []
-	if (requiredType === undefined) return results
-	return results.filter(r => r.types.some(t => t.id == requiredType || t.name == requiredType))
 }
 
 function jsonToCsv(initData, filename, rows) {
@@ -610,17 +648,6 @@ function injectCookies(headers, cookiesObj) {
 	return headers
 }
 
-function getHeadersFromFile(filePath) {
-	const fileStr = fs.readFileSync(filePath).toString("utf8").trim()
-	const headers = {}
-	fileStr.split("\n").forEach(l => {if (companies[jobs.company])
-		l = l.trim()
-		const idx = l.indexOf(":")
-		headers[l.slice(0, idx)] = l.slice(idx+1, 9999)
-	})
-	return headers
-}
-
 // Counting with different bases; the first digit has no counting limit
 // little endian
 function arrayCountUp(currentCount, countLimits) {
@@ -639,13 +666,4 @@ function arrayCountUp(currentCount, countLimits) {
 		}
 	}
 	return currentCount
-}
-
-// extract company information from jobs list
-function getCompaniesFromJobs(jobs) {
-	const companies = {}
-	for (var i = 0; i < jobs.length; i++) {
-		companies[jobs[i].company] ??= {name: jobs[i].company, logo: jobs[i].companyLogo, rating: jobs[i].companyRating}
-	}
-	return Object.entries(companies)
 }

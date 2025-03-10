@@ -9,6 +9,7 @@ There are three APIs that are used:
 1. Autocomplete API from [Monster](https://www.monster.com)
 2. Location API from [GlassDoor](https://www.glassdoor.com)
 3. Job search API from [GlassDoor](https://www.glassdoor.com)
+
 [Selenium Webdriver](https://www.npmjs.com/package/selenium-webdriver) is used to query the front-ends of the latter two APIs, and [cheerio](https://www.npmjs.com/package/cheerio) parses the resulting HTML. The `fetch` spec is used for Monster's job title autcomplete.
 
 ### Saving data to Geo
@@ -20,7 +21,11 @@ You will need a `.env` file in the same directory as the `main.js` file to store
 * `FIREFOX_BIN_PATH`: Path to the Firefox binary.
 * `GEO_TARGET_SPACE_ID`: The space on Geo with which the data is associated.
 * `WEB3_PRIVATE_KEY`: Private key of a Web3 wallet that will do the smart contract calls.
-* `MAINNET` (optional): Set to `"true"` to use [Geo Gensis mainnet](https://www.geobrowser.io). All other values will be interpreted as `"false"`.
+* `MAINNET` (optional): Set to `"true"` to use [Geo Genesis mainnet](https://www.geobrowser.io). All other values will be interpreted as `"false"`.
+
+### Debug mode
+
+You can turn on "debug mode" by creating a directory named `"debug"` in the same level as the JS files. This will save all published operations to a JSON file in `/debug` for manual inspection. Commit names will also have an identifying tag appended at the end, e.g. `"Upload data to Geo (abf5e)"`.
 
 ## Usage
 Generally, you want to run `node main` to do the main routine (collecting and uploading data). The `grc20-tools.js` file contains useful setup and management functions to interact with the data *ad hoc*.

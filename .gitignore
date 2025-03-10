@@ -1,6 +1,7 @@
 /driver/
 /node_modules/
 /scrape-data/
+/debug/
 *.csv
 package-lock.json
 *.json
