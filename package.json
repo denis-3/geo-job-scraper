@@ -1,7 +1,6 @@
 {
   "dependencies": {
     "@graphprotocol/grc-20": "^0.9.4",
-    "cheerio": "^1.0.0",
     "dotenv": "^16.4.7",
     "ethers": "^6.13.5",
     "selenium-webdriver": "^4.29.0"

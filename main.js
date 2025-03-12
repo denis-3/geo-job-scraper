@@ -3,14 +3,13 @@ const { Builder, Browser, By, Key, until, Service } = require('selenium-webdrive
 const firefox = require("selenium-webdriver/firefox")
 const child_process = require("child_process")
 const crypto = require("crypto")
-const cheerio = require("cheerio")
 const https = require("https")
 const http2 = require("http2")
 const url = require("url")
 const grc20 = require("@graphprotocol/grc-20")
 const {
 	publishOpsToSpace,
-	getGeoEntityIdsByAttributeValue,
+	getGeoEntitiesByAttributeValue,
 	geoFuzzySearch
 } = require("./grc20-tools.js")
 require("dotenv").config()
@@ -40,6 +39,12 @@ if (MAINNET) {
 		cities: {
 			"Bay Area": "W5ZEpuy3Tij1XSXtJLruQ5",
 			"San Francisco": "3qayfdjYyPv1dAYf8gPL5r"
+		},
+		employmentTypes: {
+			"Full-time": "GXE2AJLVKLFjDvsWcNaAEM",
+			"In-person": "ToEDDgFcymwVCMrZEKWS88",
+			"Hybrid work": "2VXZVTjZ1SsXRAc5Hyor7c",
+			"Remote": "UeM4M31P1wU5isw9yyphPo"
 		}
 	}
 } else {
@@ -214,8 +219,11 @@ async function scrapeGlassDoor(jobQuery, locInfo, jobCount, pageNum, gdCookie) {
 				case "HOURLY":
 					payPeriod = "Hourly"
 					break
+				case "MONTHLY":
+					payPeriod = "Monthly"
+					break
 				default:
-					throw Error("Unknown pay period: ", + payPeriod)
+					throw Error("Unknown pay period: " + payPeriod)
 			}
 		}
 
@@ -346,8 +354,9 @@ async function convertJobsToGeoOps(jobs, companies) {
 	}
 
 	for (var i = 0; i < jobs.length; i++) {
-		const jobLinkQuery = await getGeoEntityIdsByAttributeValue(grc20.ContentIds.WEB_URL_ATTRIBUTE, jobs[i].jobLink)
-		if (jobLinkQuery.length > 0) continue // TODO: Later, the code should update job postings
+		const jobLinkQuery = await getGeoEntitiesByAttributeValue(grc20.ContentIds.WEB_URL_ATTRIBUTE, jobs[i].jobLink)
+		// check if job already exists, and is not deleted
+		if (jobLinkQuery.length > 0 && jobLinkQuery?.[0]?.triples?.length > 0) continue // TODO: Later, the code should update job postings
 		var payCurrencyGeoId = ""
 		switch(jobs[i].payCurrency) {
 			case "USD":
@@ -373,7 +382,7 @@ async function convertJobsToGeoOps(jobs, companies) {
 		}
 
 		// add some extra properties if applicable
-		if (jobs[i].company != "Confidential" && typeof jobs[i].company == "string") {
+		if (jobs[i].company != "Confidential" && typeof jobs[i].company == "string" && companyGeoIdCache[jobs[i].company] != "AJpKRzyn9hGfC3r9fvVaRr") {
 			jobProps[GEO_ENT_IDS.employer] = {to: companyGeoIdCache[jobs[i].company]}
 		}
 
@@ -465,12 +474,12 @@ async function convertJobsToGeoOps(jobs, companies) {
 
 async function main() {
 	// main scrape config
-	const letters = "sea".split("")
+	const letters = "seabfd".split("")
 	const cityList = ["San Francisco"]
-	const pageDepth = 1
+	const pageDepth = 2
 
 	console.log("Getting job titles...")
-	const jobTitles = []
+	const jobTitles = ["Data Analyst", "Backend Developer"]
 	for (var i = 0; i < letters.length; i++) {
 		const newJobTitles = await getMonsterJobTitles(letters[i])
 		jobTitles.push(...newJobTitles)
@@ -546,7 +555,7 @@ async function main() {
 	console.log("Getting GRC-20 triplet ops from jobs...")
 	const geoTripletOps = await convertJobsToGeoOps(allJobs, allCompanies)
 	console.log("Uploading data to Geo...")
-	const txInfo = await publishOpsToSpace(GEO_ENT_IDS.targetSpace, geoTripletOps, "Add data from GlassDoor scrape")
+	const txInfo = await publishOpsToSpace(GEO_ENT_IDS.targetSpace, geoTripletOps, "Add job openings from GlassDoor")
 	console.log("Data uploaded! Transaction info:", txInfo)
 }
 

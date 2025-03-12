@@ -7,9 +7,39 @@ const { getWallet } = require("./wallet.js")
 require("dotenv").config()
 
 const MAINNET = process.env.MAINNET === "true"
+const FULL_ENTITY_FIELDS = `name
+id
+currentVersion {
+	version {
+		triples {
+			nodes {
+				attributeId
+				valueType
+				numberValue
+				textValue
+				booleanValue
+				attribute {
+					name
+				}
+			}
+			totalCount
+		}
+		relationsByFromVersionId {
+			nodes {
+				typeOfId
+				toEntityId
+				typeOf {
+					name
+				}
+				entity {
+					id
+				}
+			}
+			totalCount
+		}
+	}
+}`
 const gqlEndpoint = MAINNET ? "https://hypergraph.up.railway.app/graphql" : "https://geo-conduit.up.railway.app/graphql"
-
-// console.log(grc20)
 
 // convert a graphQL entity object to something more human-readable
 function processEntityFromGraphQL(entity) {
@@ -20,7 +50,7 @@ function processEntityFromGraphQL(entity) {
 		relations: []
 	}
 
-	entity.triples.nodes.forEach(t => {
+	entity.currentVersion.version.triples.nodes.forEach(t => {
 		returnData.triples.push({
 			attributeId: t.attributeId,
 			valueType: t.valueType,
@@ -29,7 +59,7 @@ function processEntityFromGraphQL(entity) {
 		})
 	})
 
-	entity.relationsByFromEntityId.nodes.forEach(r => {
+	entity.currentVersion.version.relationsByFromVersionId.nodes.forEach(r => {
 		returnData.relations.push({
 			id: r.entity.id,
 			typeId: r.typeOfId,
@@ -54,6 +84,11 @@ async function getEntitiesByGraphQL(graphQlQuery) {
 	})
 
 	const json = await resp.json()
+	if (json.data == undefined) {
+		console.error(graphQlQuery)
+		console.error(json)
+		throw Error("Error with query")
+	}
 	var ents = json.data.entities
 	if (ents === null) return []
 	return ents.nodes.map(processEntityFromGraphQL)
@@ -65,34 +100,7 @@ async function getGeoEntityById(entityId) {
 	const entityGQL = `query {
 		entities(filter: {id: {equalTo: "${entityId}"}}) {
 			nodes {
-				name
-				id
-				triples {
-					nodes {
-						attributeId
-						valueType
-						numberValue
-						textValue
-						booleanValue
-						attribute {
-							name
-						}
-					}
-					totalCount
-				}
-				relationsByFromEntityId {
-					nodes {
-						typeOfId
-						toEntityId
-						typeOf {
-							name
-						}
-						entity {
-							id
-						}
-					}
-					totalCount
-				}
+				${FULL_ENTITY_FIELDS}
 			}
 		}
 	}`
@@ -102,36 +110,9 @@ async function getGeoEntityById(entityId) {
 
 async function getGeoEntitiesByType(targetTypeId) {
 	const searchByTypeId = `query {
-		entities(filter:{currentVersion:{version:{versionTypes:{some:{type:{entityId:{in: ["${targetTypeId}"]}}}}}}} first: 25 offset: 0) {
+		entities(filter:{currentVersion:{version:{versionTypes:{some:{type:{entityId:{in: ["${targetTypeId}"]}}}}}}} first: 30 offset: 0) {
 			nodes {
-				name
-				id
-				triples {
-					nodes {
-						attributeId
-						valueType
-						numberValue
-						textValue
-						booleanValue
-						attribute {
-							name
-						}
-					}
-					totalCount
-				}
-				relationsByFromEntityId {
-					nodes {
-						typeOfId
-						toEntityId
-						typeOf {
-							name
-						}
-						entity {
-							id
-						}
-					}
-					totalCount
-				}
+				${FULL_ENTITY_FIELDS}
 			}
 		}
 	}`
@@ -142,63 +123,26 @@ async function getGeoEntitiesByType(targetTypeId) {
 // gets entities by their attribute value.
 // useful when to query job openings by their URLs to see if they already exist
 // since glassdoor URLs are invariant
-async function getGeoEntityIdsByAttributeValue(attributeId, attributeValue) {
+async function getGeoEntitiesByAttributeValue(attributeId, attributeValue) {
 	const searchByAttrGQL = `query {
-		triples(filter: {attributeId: {equalTo: "${attributeId}"}, and: {textValue: {equalTo: "${attributeValue}"}}}) {
+		entities(filter:{currentVersion:{version:{triples:{some:{attributeId:{equalTo:"${attributeId}"}and:{textValue:{equalTo:"${attributeValue}"}}}}}}} first: 30 offset: 0) {
 			nodes {
-				entityId
+				${FULL_ENTITY_FIELDS}
 			}
 		}
 	}`
 
-	const resp = await fetch(gqlEndpoint, {
-		method: "POST",
-		headers: {
-			"Accept": "application/graphql-response+json",
-			"Content-Type": "application/json"
-		},
-		body: JSON.stringify({
-			query: searchByAttrGQL
-		})
-	})
-	const json = await resp.json()
-	return json.data.triples.nodes.map(n => n.entityId)
+	const data = await getEntitiesByGraphQL(searchByAttrGQL)
+	return data
 }
 
 // get an entity by name
 // optionally pass a requiredType parameter to only return results that match the type
 async function geoFuzzySearch(queryTerm, requiredType = undefined) {
 	const searchByName = `query {
-		entities(filter:{currentVersion:{version:{name:{startsWithInsensitive:"${queryTerm}"} versionTypes:{every:{type:{entityId:{notIn: [\"Fc836HBAyTaLaZgBzcTS2a\",\"PnQsGwnnztrLNRCm9mcKKY\",\"V6R8hWrKfLZmtyv4dQyyzo\",\"9u4zseS3EDXG9ZvwR9RmqU\"]}}}}}}} first: 25 offset: 0) {
+		entities(filter:{currentVersion:{version:{name:{startsWithInsensitive:"${queryTerm}"} versionTypes:{every:{type:{entityId:{notIn: [\"Fc836HBAyTaLaZgBzcTS2a\",\"PnQsGwnnztrLNRCm9mcKKY\",\"V6R8hWrKfLZmtyv4dQyyzo\",\"9u4zseS3EDXG9ZvwR9RmqU\"]}}}}}}} first: 30 offset: 0) {
 			nodes {
-				name
-				id
-				triples {
-					nodes {
-						attributeId
-						valueType
-						numberValue
-						textValue
-						booleanValue
-						attribute {
-							name
-						}
-					}
-					totalCount
-				}
-				relationsByFromEntityId {
-					nodes {
-						typeOfId
-						toEntityId
-						typeOf {
-							name
-						}
-						entity {
-							id
-						}
-					}
-					totalCount
-				}
+				${FULL_ENTITY_FIELDS}
 			}
 		}
 	}`
@@ -218,6 +162,9 @@ async function createSpace(spaceName, initialEditor) {
 }
 
 async function publishOpsToSpace(spaceId, ops, commitMessage) {
+	if (ops?.length == 0) {
+		throw Error("There are no ops to publish!")
+	}
 	const wa = await getWallet()
 
 	const debugMode = fs.existsSync("./debug/")
@@ -471,7 +418,7 @@ if (require.main === module) {
 
 		// createGDTypes(process.env.GEO_TARGET_SPACE_ID).then(console.log)
 
-		// const entitiesToRemove = ["6rmkf4QJ6amYBCEwtfq39e", "2jJifyvC5YoFDYEShUqfDb"]
+		// const entitiesToRemove = ["6rmkf4QJ6amYBCEwtfq39e", "3eeqGBBfdMyQ1uH9HXanpv"]
 		// for (var i = 0; i < entitiesToRemove.length; i++) {
 		// 	entitiesToRemove[i] = await getGeoEntityById(entitiesToRemove[i])
 		// }
@@ -481,7 +428,7 @@ if (require.main === module) {
 		// })
 		// await publishOpsToSpace(process.env.GEO_TARGET_SPACE_ID, deleteOps, "Remove tables").then(console.log)
 
-		// const typeToRemove = "PCNrPCsgfsb2U56PAEgNNL"
+		// const typeToRemove = "RaMe9z4ZwLnHvMJeQL7ZNk"
 		// const entsOfType = await getGeoEntitiesByType(typeToRemove)
 		// const delOps = []
 		// entsOfType.forEach(e => {
@@ -489,11 +436,11 @@ if (require.main === module) {
 		// })
 		// const typeEnt = await getGeoEntityById(typeToRemove)
 		// delOps.push(...deleteEntity(typeEnt))
-		// await publishOpsToSpace(process.env.GEO_TARGET_SPACE_ID, delOps, "Remove extraneous type").then(console.log)
+		// await publishOpsToSpace(process.env.GEO_TARGET_SPACE_ID, delOps, "Remove jobs from personal space").then(console.log)
 
 		// createMainnetSupplement(process.env.GEO_TARGET_SPACE_ID).then(console.log)
 
-		// getGeoEntityIdsByAttributeValue("MbB6MZUTDFL9F8zp52QHCQ", "Annual").then(console.log)
+		// getGeoEntitiesByAttributeValue("MbB6MZUTDFL9F8zp52QHCQ", "Annual").then(console.log)
 
 		// getGeoEntitiesByType("7ZpyzJE2Zh62FpmVu5Wkc1").then(console.log)
 
@@ -505,7 +452,7 @@ if (require.main === module) {
 
 
 module.exports = {
-	getGeoEntityIdsByAttributeValue,
+	getGeoEntitiesByAttributeValue,
 	publishOpsToSpace,
 	geoFuzzySearch
 }
